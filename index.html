@@ -57,13 +57,15 @@ a { color: lightblue; }
     </datalist>
 </div>
 <div id="viewport" style="height:100%;user-select:none;overflow:clip">
-    <canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="2000" height="2000" ondragstart="return false">
+    <canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="1000" height="1000" ondragstart="return false">
 </div>
 <div id="typeOverlay" style="position: fixed; bottom: 0; right: 0; background-color: black; font-size: 2em;">
 </div>
 </body>
 <script type="text/javascript">
 "use strict";
+
+const dim = canvas.width;
 
 const types = ["normal", "fire", "water", "electric", "grass", "ice", "fighting", "poison", "ground", "flying", "psychic", "bug", "rock", "ghost", "dragon", "dark", "steel", "fairy"];
 const palette = ['#A8A77A', '#EE8130', '#6390F0', '#F7D02C', '#7AC74C', '#96D9D6', '#C22E28', '#A33EA1', '#E2BF65', '#A98FF3', '#F95587', '#A6B91A', '#B6A136', '#735797', '#6F35FC', '#705746', '#B7B7CE', '#D685AD'];
@@ -145,9 +147,9 @@ typeDiv.onclick = function(e) {
     }
 
     if (dis) {
-        for (let y = 0; y < 2000; y++) {
-            for (let x = 0; x < 2000; x++) {
-                while (typeDisabled & (1 << nextPokeState[x + y * 2000])) {
+        for (let y = 0; y < dim; y++) {
+            for (let x = 0; x < dim; x++) {
+                while (typeDisabled & (1 << nextPokeState[x + y * dim])) {
                     setPixel(x, y, (Math.random() * nTypes) | 0);
                 }
             }
@@ -251,19 +253,19 @@ function sleepFrame() {
 }
 
 
-let pokeState = new Uint8Array(2000*2000), nextPokeState = new Uint8Array(2000 * 2000);
+let pokeState = new Uint8Array(dim*dim), nextPokeState = new Uint8Array(dim * dim);
 
 let ctx = canvas.getContext('2d');
 
-let imageData = ctx.getImageData(0, 0, 2000, 2000);
+let imageData = ctx.getImageData(0, 0, dim, dim);
 let pixels = imageData.data;
 
 function dumpImageData(all) {
     if (all) {
         ctx.putImageData(imageData, 0, 0);
     } else {
-        let width = 2000;
-        let height = 2000;
+        let width = dim;
+        let height = dim;
         ctx.putImageData(imageData, 0, 0,
             cx, cy,
             Math.min(width - cx, cw),
@@ -273,20 +275,20 @@ function dumpImageData(all) {
 }
 
 function setPixel(x, y, col) {
-    let o = 4 * (x + y * 2000);
+    let o = 4 * (x + y * dim);
     pixels[o+0] = pal[3 * col];
     pixels[o+1] = pal[3 * col + 1];
     pixels[o+2] = pal[3 * col + 2];
     pixels[o+3] = 255;
-    nextPokeState[x + y * 2000] = col;
+    nextPokeState[x + y * dim] = col;
 }
 
 function randomizeState() {
-    for (let y = 0; y < 2000; y++) {
-        for (let x = 0; x < 2000; x++) {
+    for (let y = 0; y < dim; y++) {
+        for (let x = 0; x < dim; x++) {
             do {
                 setPixel(x, y, (Math.random() * nTypes) | 0);
-            } while (typeDisabled & (1 << nextPokeState[x + y * 2000]));
+            } while (typeDisabled & (1 << nextPokeState[x + y * dim]));
         }
     }
     [pokeState, nextPokeState] = [nextPokeState, pokeState];
@@ -295,11 +297,11 @@ function randomizeState() {
 
 function applyStep() {
     function getType(x, y) {
-        return pokeState[(x + 2000) % 2000 + (y + 2000) % 2000 * 2000];
+        return pokeState[(x + dim) % dim + (y + dim) % dim * dim];
     }
 
-    for (let y = 0; y < 2000; y++) {
-        for (let x = 0; x < 2000; x++) {
+    for (let y = 0; y < dim; y++) {
+        for (let x = 0; x < dim; x++) {
             let a = getType(x, y - 1), b = getType(x - 1, y), c = getType(x, y), d = getType(x + 1, y), e = getType(x, y + 1);
             let next = transitions[transOffset(a, b, c, d, e)];
             setPixel(x, y, next);
@@ -315,20 +317,6 @@ function applyStep() {
 async function renderLoop() {
     let lastSleep = 0;
 
-    function desaturate() {
-        let f = 0.04; // desaturate by 10%
-
-        for (let i = 0; i < pixels.length; i += 4) {
-            let r = pixels[i], g = pixels[i+1], b = pixels[i + 2];
-            // https://stackoverflow.com/a/20820649/3694
-            let L = r * 0.3 + g * 0.6 + b * .1;
-
-            pixels[i] = r + f * (L - r);
-            pixels[i+1] = g + f * (L - g);
-            pixels[i+2] = b + f * (L - b);
-        }
-    }
-
     while (true) {
         while (nextEventLock || speed === 0) {
             // seek operation in progress
@@ -343,7 +331,6 @@ async function renderLoop() {
 
         if (Math.abs(curTs - lastSleep) > Math.abs(speed) || true) {
             dumpImageData();
-            // desaturate();
             await sleepFrame();
             while (speed == 0) {
                 await sleepFrame();
@@ -373,8 +360,9 @@ viewport.onwheel = function(e) {
     let bounds = viewport.getBoundingClientRect();
     let cx = e.clientX - bounds.left;
     let cy = e.clientY - bounds.top;
-    let mx = 1000-(1000-(cx-tx))/zoom;
-    let my = 1000-(1000-(cy-ty))/zoom;
+    const dim2 = (dim/2)|0;
+    let mx = dim2-(dim2-(cx-tx))/zoom;
+    let my = dim2-(dim2-(cy-ty))/zoom;
 
     let oldZoom = zoom;
 
@@ -389,33 +377,34 @@ viewport.onwheel = function(e) {
 
     // thanks, wolframalpha! solving for mx_beforezoom=mx_afterzoom,
     // to keep the point the mouse is hovering over invariant after the zoom.
-    tx = zoom * (1000 + tx - cx) / oldZoom + cx - 1000;
-    ty = zoom * (1000 + ty - cy) / oldZoom + cy - 1000;
+    tx = zoom * (dim2 + tx - cx) / oldZoom + cx - dim2;
+    ty = zoom * (dim2 + ty - cy) / oldZoom + cy - dim2;
 
     canvas.style["image-rendering"] = zoom < 1 ? 'auto' : 'pixelated';
     updateTransform();
 }
 
 // track what part of the canvas is actually visible in the viewport for faster blitting
-let cx = 0, cw = 2000, cy = 0, ch = 2000;
+let cx = 0, cw = dim, cy = 0, ch = dim;
 
 function updateTransform() {
     // clamp translation to canvas bounds
     let vr = viewport.getBoundingClientRect();
 
     let quadseen = 0xff;
-    tx = Math.min(tx, viewport.clientWidth - 20 - ((-1000 * zoom) + 1000));
-    tx = Math.max(tx, 20 - ((500 * (quadseen & 2) * zoom) + 1000));
-    ty = Math.min(ty, viewport.clientHeight - 20 - vr.top - ((-1000 * zoom) + 1000));
-    ty = Math.max(ty, 20 - ((250 * (quadseen & 4) * zoom) + 1000));
+    const dim2 = (dim / 2) | 0;
+    tx = Math.min(tx, viewport.clientWidth - 20 - ((-dim2 * zoom) + dim2));
+    tx = Math.max(tx, 20 - ((dim2 * zoom) + dim2));
+    ty = Math.min(ty, viewport.clientHeight - 20 - vr.top - ((-dim2 * zoom) + dim2));
+    ty = Math.max(ty, 20 - ((dim2 * zoom) + dim2));
 
     canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
 
     let cr = canvas.getBoundingClientRect();
     cx = Math.max(0, ((-cr.x / zoom)|0)-1);
-    cw = Math.min(2000, ((vr.width / zoom)|0) + 3);
+    cw = Math.min(dim, ((vr.width / zoom)|0) + 3);
     cy = Math.max(0, ((-cr.y / zoom)|0)-1);
-    ch = Math.min(2000, ((vr.height / zoom)|0) + 3);
+    ch = Math.min(dim, ((vr.height / zoom)|0) + 3);
 
     dumpImageData();
     updateUrl();
@@ -447,9 +436,9 @@ viewport.onmousemove = function(e) {
     let bounds = viewport.getBoundingClientRect();
     let cx = e.clientX - bounds.left;
     let cy = e.clientY - bounds.top;
-    let mx = 1000-(1000-(cx-tx))/zoom;
-    let my = 1000-(1000-(cy-ty))/zoom;
-    let state = pokeState[(mx|0)+(my|0)*2000];
+    let mx = (dim/2)-((dim/2)-(cx-tx))/zoom;
+    let my = (dim/2)-((dim/2)-(cy-ty))/zoom;
+    let state = pokeState[(mx|0)+(my|0)*dim];
     if (state !== undefined) {
         typeOverlay.innerText = types[state];
     }
