@@ -91,7 +91,7 @@ const adv = [
     [2,2,2,2,2,2,1,2,2,2,4,2,2,4,2,1,2,1],
     [2,1,1,1,2,4,2,2,2,2,2,2,4,2,2,2,1,4],
     [2,1,2,2,2,2,4,1,2,2,2,2,2,2,4,4,1,2],
-]
+];
 
 
 function findWinner(a, b, c, d, e) {
@@ -112,33 +112,42 @@ function findWinner(a, b, c, d, e) {
 
 const nTypes = types.length;
 
-const typeDisabled = new Uint8Array(nTypes);
+var typeDisabled = 0;
 let typeDiv = document.querySelector("#types");
 for (let i = 0; i < nTypes; i++) {
     let a = document.createElement("a");
     a.className = "type-cell";
     a.innerText = types[i];
+    a.id = "type-" + types[i];
     a.style.backgroundColor = palette[i];
     typeDiv.appendChild(a);
 }
+
+function toggleType(name) {
+    let i = types.indexOf(name);
+    document.getElementById("type-" + types[i]).classList.toggle("disabled");
+    typeDisabled ^= 1 << i;
+}
+
 typeDiv.onclick = function(e) {
     let targ = e.target;
     if (!targ.classList.contains("type-cell")) {
         return;
     }
-    targ.classList.toggle("disabled");
-    let i = types.indexOf(targ.innerText.toLowerCase());
-    let dis = targ.classList.contains("disabled");
-    typeDisabled[i] = dis;
+    toggleType(targ.innerText.toLowerCase());
 
     nextPokeState = pokeState.slice(0);
 
-    console.log(i, targ.innerText, dis);
+    let dis = targ.classList.contains("disabled");
+
+    if (bitCount(typeDisabled) == nTypes) { // avoid infinite loops
+        toggleType("normal");
+    }
 
     if (dis) {
         for (let y = 0; y < 2000; y++) {
             for (let x = 0; x < 2000; x++) {
-                while (typeDisabled[nextPokeState[x + y * 2000]]) {
+                while (typeDisabled & (1 << nextPokeState[x + y * 2000])) {
                     setPixel(x, y, (Math.random() * nTypes) | 0);
                 }
             }
@@ -146,6 +155,7 @@ typeDiv.onclick = function(e) {
     }
     [pokeState, nextPokeState] = [nextPokeState, pokeState];
     dumpImageData();
+    updateUrl();
 }
 
 const transitions = new Uint8Array(Math.pow(nTypes, 5));
@@ -276,13 +286,12 @@ function randomizeState() {
         for (let x = 0; x < 2000; x++) {
             do {
                 setPixel(x, y, (Math.random() * nTypes) | 0);
-            } while (typeDisabled[nextPokeState[x + y * 2000]]);
+            } while (typeDisabled & (1 << nextPokeState[x + y * 2000]));
         }
     }
     [pokeState, nextPokeState] = [nextPokeState, pokeState];
 }
 
-randomizeState();
 
 function applyStep() {
     function getType(x, y) {
@@ -347,24 +356,13 @@ async function renderLoop() {
             lastSleep = curTs;
         }
     }
-    updateTimestamp();
     dumpImageData();
 }
 
 const N_BUFS = 84;
 let bufs = [];
 
-// group lengths can exceed a 16-bit integer,
-// so it's best to just pack the offsets as 24b with a 7b buf id
-let groupOffsets = new Uint32Array(5542546);
-let groupHashes = {};
-let curGroup = 0;
-let bufN = 0;
-let buf;
-let curIndex = 0;
 let curTs = 0;
-let startTime = 0;
-
 
 // PAN/ZOOM
 
@@ -420,6 +418,7 @@ function updateTransform() {
     ch = Math.min(2000, ((vr.height / zoom)|0) + 3);
 
     dumpImageData();
+    updateUrl();
 }
 
 function setTransform(x, y, z) {
@@ -450,7 +449,10 @@ viewport.onmousemove = function(e) {
     let cy = e.clientY - bounds.top;
     let mx = 1000-(1000-(cx-tx))/zoom;
     let my = 1000-(1000-(cy-ty))/zoom;
-    typeOverlay.innerText = types[pokeState[(mx|0)+(my|0)*2000]];
+    let state = pokeState[(mx|0)+(my|0)*2000];
+    if (state) {
+        typeOverlay.innerText = types[state];
+    }
 }
 viewport.onmouseout = function(e) {
     typeOverlay.innerText = "";
@@ -484,6 +486,72 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+function bitCount (n) {
+  return n && n.toString(2).match(/1/g).length
+}
+
+let urlUpdateHandle = 0;
+function updateUrl() {
+    if (urlUpdateHandle) {
+        clearTimeout(urlUpdateHandle);
+    }
+    urlUpdateHandle = setTimeout(function() {
+        let prefix = "#";
+        if (typeDisabled) {
+            prefix += "t";
+            if (bitCount(typeDisabled) < nTypes / 2) {
+                prefix += "~";
+                for (let i = 0; i < nTypes; i++) {
+                    if (typeDisabled & (1 << i)) {
+                        prefix += types[i].slice(0, 3).toUpperCase();
+                    }
+                }
+            } else {
+                for (let i = 0; i < nTypes; i++) {
+                    if (!(typeDisabled & (1 << i))) {
+                        prefix += types[i].slice(0, 3).toUpperCase();
+                    }
+                }
+            }
+        }
+        history.replaceState(null, "", `${prefix}x${(cx+cw/2)|0}y${(cy+ch/2)|0}z${zoom}`)
+    }, 200);
+
+}
+
+if (document.location.hash) {
+    let x = null, y = null, z = null;
+    for (const m of document.location.hash.matchAll(/([a-z])(-?[0-9]+|~?[A-Z]+)/g)) {
+        switch (m[1]) {
+        case 'x': x = +m[2]; break;
+        case 'y': y = +m[2]; break;
+        case 'z': z = +m[2]; break;
+        case 't': {
+            let t = m[2];
+            if (t[0] == "~") {
+                t = t.slice(1);
+            } else {
+                for (let j = 0; j < nTypes; j++) {
+                    toggleType(types[j]);
+                }
+            }
+            for (let i = 0; i < t.length; i += 3) {
+                let frag = t.slice(i, i + 3).toLowerCase();
+                for (let j = 0; j < nTypes; j++) {
+                    if (frag == types[j].slice(0, 3)) {
+                        toggleType(types[j]);
+                    }
+                }
+            }
+        }
+        }
+    }
+    setTransform(x, y, z);
+} else {
+    updateTransform();
+}
+
+randomizeState();
 updateTransform();
 renderLoop();
 
