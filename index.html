@@ -1,0 +1,411 @@
+<html>
+<head>
+    <title>Pokemon Cellular Automata</title>
+</head>
+<body style="overflow:hidden;margin:0;background-color:black;color:white;">
+<div style="margin:5px;display:flex;display:none;">
+    <span id="speed" style="width:5em;text-align:center;">5x</span>
+    <input id="speedslider" type="range" min="0" list="steplist" max="200" value="100" style="flex-grow:1;display:inline;" draggable="false">
+    <datalist id="steplist">
+        <option>0</option>
+        <option>100</option>
+        <option>200</option>
+    </datalist>
+</div>
+<div id="viewport" style="height:100%;user-select:none;overflow:clip">
+    <canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="2000" height="2000" ondragstart="return false">
+</div>
+<div id="typeOverlay" style="position: fixed; bottom: 0; right: 0; background-color: black; font-size: 2em;">
+</div>
+</body>
+<script type="text/javascript">
+"use strict";
+
+const types = ["normal", "fire", "water", "electric", "grass", "ice", "fighting", "poison", "ground", "flying", "psychic", "bug", "rock", "ghost", "dragon", "dark", "steel", "fairy"];
+const palette = ['#A8A77A', '#EE8130', '#6390F0', '#F7D02C', '#7AC74C', '#96D9D6', '#C22E28', '#A33EA1', '#E2BF65', '#A98FF3', '#F95587', '#A6B91A', '#B6A136', '#735797', '#6F35FC', '#705746', '#B7B7CE', '#D685AD'];
+
+// https://pokemondb.net/type
+// JSON.stringify([...document.querySelectorAll(".type-table tr")].map(x=>[...x.querySelectorAll("td")].map(x=>+x.className.split(/-/)[4]/10)))
+// 2 = 100% effective, 1 = 50% effective, 4 = 200% effective, 0 = 0% effective
+// rows are attackers, columns are defenders
+const adv = [
+    [2,2,2,2,2,2,2,2,2,2,2,2,1,0,2,2,1,2],
+    [2,1,1,2,4,4,2,2,2,2,2,4,1,2,1,2,4,2],
+    [2,4,1,2,1,2,2,2,4,2,2,2,4,2,1,2,2,2],
+    [2,2,4,1,1,2,2,2,0,4,2,2,2,2,1,2,2,2],
+    [2,1,4,2,1,2,2,1,4,1,2,1,4,2,1,2,1,2],
+    [2,1,1,2,4,1,2,2,4,4,2,2,2,2,4,2,1,2],
+    [4,2,2,2,2,4,2,1,2,1,1,1,4,0,2,4,4,1],
+    [2,2,2,2,4,2,2,1,1,2,2,2,1,1,2,2,0,4],
+    [2,4,2,4,1,2,2,4,2,0,2,1,4,2,2,2,4,2],
+    [2,2,2,1,4,2,4,2,2,2,2,4,1,2,2,2,1,2],
+    [2,2,2,2,2,2,4,4,2,2,1,2,2,2,2,0,1,2],
+    [2,1,2,2,4,2,1,1,2,1,4,2,2,1,2,4,1,1],
+    [2,4,2,2,2,4,1,2,1,4,2,4,2,2,2,2,1,2],
+    [0,2,2,2,2,2,2,2,2,2,4,2,2,4,2,1,2,2],
+    [2,2,2,2,2,2,2,2,2,2,2,2,2,2,4,2,1,0],
+    [2,2,2,2,2,2,1,2,2,2,4,2,2,4,2,1,2,1],
+    [2,1,1,1,2,4,2,2,2,2,2,2,4,2,2,2,1,4],
+    [2,1,2,2,2,2,4,1,2,2,2,2,2,2,4,4,1,2],
+]
+
+
+function findWinner(a, b, c, d, e) {
+    let aDmg = adv[b][a] + adv[c][a] + adv[d][a] + adv[e][a];
+    let bDmg = adv[a][b] + adv[c][b] + adv[d][b] + adv[e][b];
+    let cDmg = adv[a][c] + adv[b][c] + adv[d][c] + adv[e][c];
+    let dDmg = adv[a][d] + adv[b][d] + adv[c][d] + adv[e][d];
+    let eDmg = adv[a][e] + adv[b][e] + adv[c][e] + adv[d][e];
+
+    let best = Math.min(aDmg, bDmg, cDmg, dDmg, eDmg);
+
+    if (best == cDmg) return c;  // prefer center
+    if (best == aDmg) return a;
+    if (best == bDmg) return b;
+    if (best == dDmg) return d;
+    if (best == eDmg) return e;
+}
+
+const nTypes = types.length;
+
+console.log(nTypes);
+
+const transitions = new Uint8Array(Math.pow(nTypes, 5));
+
+function transOffset(a, b, c, d, e) {
+    return e + nTypes * (d + nTypes * (c + nTypes * (b + nTypes * a)));
+}
+
+for (let a = 0; a < nTypes; a++) {
+    for (let b = 0; b < nTypes; b++) {
+        for (let c = 0; c < nTypes; c++) {
+            for (let d = 0; d < nTypes; d++) {
+                for (let e = 0; e < nTypes; e++) {
+                    let win = findWinner(a, b, c, d, e);
+                    // console.log(types[a], types[b], types[c], types[d], types[e], '=>', types[win]);
+                    transitions[transOffset(a, b, c, d, e)] = win;
+                }
+            }
+        }
+    }
+}
+
+const pal = [];
+
+for (let c of palette) {
+    pal.push(parseInt(c.slice(1, 3), 16));
+    pal.push(parseInt(c.slice(3, 5), 16));
+    pal.push(parseInt(c.slice(5, 7), 16));
+}
+
+let speed = 1;
+let speedticks = 0;
+
+function calcSpeed() {
+    let val = speedslider.value/10;
+    speedticks = 0;
+    if (val < 10) {
+        return val/10;
+    } else {
+        return Math.pow(2, val-10);
+    }
+}
+
+speedslider.oninput = function() {
+    let newSpeed = calcSpeed();
+    speed = newSpeed;
+    let s = speed;
+    document.getElementById("speed").innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
+}
+speedslider.oninput();
+
+let jumpTarget = 0;
+
+// getting the next event is an asynchronous operation
+let nextEventLock = 0; // 0 = unheld, 1 = normal playback, 2 = jumping
+
+async function doJump(target) {
+    jumpTarget = target;
+
+    while (nextEventLock) {
+        if (nextEventLock == 2) {
+            return;
+        }
+        await sleepFrame();
+    }
+    nextEventLock = 2;
+
+    let lastDump = +new Date();
+    let ospeed = speed;
+    speed = jumpTarget < curTs ? -1 : 1;
+
+    while (speed < 0 ? jumpTarget < curTs : jumpTarget > curTs) {
+        if (speed !== 1 && speed !== -1) {
+            ospeed = speed;   // adjusted speed during jump!
+        }
+        speed = jumpTarget < curTs ? -1 : 1;
+
+        applyStep();
+    }
+
+    dumpImageData();
+
+    speed = ospeed;
+    nextEventLock = 0;
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function sleepFrame() {
+    return new Promise(requestAnimationFrame);
+}
+
+
+let pokeState = new Uint8Array(2000*2000), nextPokeState = new Uint8Array(2000 * 2000);
+
+let ctx = canvas.getContext('2d');
+
+let imageData = ctx.getImageData(0, 0, 2000, 2000);
+let pixels = imageData.data;
+
+function dumpImageData(all) {
+    if (all) {
+        ctx.putImageData(imageData, 0, 0);
+    } else {
+        let width = 2000;
+        let height = 2000;
+        ctx.putImageData(imageData, 0, 0,
+            cx, cy,
+            Math.min(width - cx, cw),
+            Math.min(height - cy, ch),
+        );
+    }
+}
+
+function setPixel(x, y, col) {
+    let o = 4 * (x + y * 2000);
+    pixels[o+0] = pal[3 * col];
+    pixels[o+1] = pal[3 * col + 1];
+    pixels[o+2] = pal[3 * col + 2];
+    pixels[o+3] = 255;
+    nextPokeState[x + y * 2000] = col;
+}
+
+function randomizeState() {
+    for (let y = 0; y < 2000; y++) {
+        for (let x = 0; x < 2000; x++) {
+            setPixel(x, y, (Math.random() * nTypes) | 0);
+        }
+    }
+    [pokeState, nextPokeState] = [nextPokeState, pokeState];
+}
+
+randomizeState();
+
+function applyStep() {
+    function getType(x, y) {
+        return pokeState[(x + 2000) % 2000 + (y + 2000) % 2000 * 2000];
+    }
+
+    for (let y = 0; y < 2000; y++) {
+        for (let x = 0; x < 2000; x++) {
+            let a = getType(x, y - 1), b = getType(x - 1, y), c = getType(x, y), d = getType(x + 1, y), e = getType(x, y + 1);
+            let next = transitions[transOffset(a, b, c, d, e)];
+            setPixel(x, y, next);
+
+        }
+    }
+
+    [pokeState, nextPokeState] = [nextPokeState, pokeState];
+
+    curTs++;
+}
+
+async function renderLoop() {
+    let lastSleep = 0;
+
+    function desaturate() {
+        let f = 0.04; // desaturate by 10%
+
+        for (let i = 0; i < pixels.length; i += 4) {
+            let r = pixels[i], g = pixels[i+1], b = pixels[i + 2];
+            // https://stackoverflow.com/a/20820649/3694
+            let L = r * 0.3 + g * 0.6 + b * .1;
+
+            pixels[i] = r + f * (L - r);
+            pixels[i+1] = g + f * (L - g);
+            pixels[i+2] = b + f * (L - b);
+        }
+    }
+
+    while (true) {
+        while (nextEventLock || speed === 0) {
+            // seek operation in progress
+            await sleepFrame();
+        }
+
+        nextEventLock = 1;
+
+        applyStep();
+
+        nextEventLock = 0;
+
+        if (Math.abs(curTs - lastSleep) > Math.abs(speed) || true) {
+            dumpImageData();
+            // desaturate();
+            await sleepFrame();
+            while (speed == 0) {
+                await sleepFrame();
+            }
+            if (Math.abs(speed) < 100 && speedticks > 30) {
+                let slack = Math.min(1500, Math.abs((curTs - lastSleep) / (60*speed/1000)));
+                await sleep(slack);
+            }
+            speedticks++;
+            lastSleep = curTs;
+        }
+    }
+    updateTimestamp();
+    dumpImageData();
+}
+
+const N_BUFS = 84;
+let bufs = [];
+
+// group lengths can exceed a 16-bit integer,
+// so it's best to just pack the offsets as 24b with a 7b buf id
+let groupOffsets = new Uint32Array(5542546);
+let groupHashes = {};
+let curGroup = 0;
+let bufN = 0;
+let buf;
+let curIndex = 0;
+let curTs = 0;
+let startTime = 0;
+
+
+// PAN/ZOOM
+
+var zoom = 1;
+var tx = 0, ty = 0;
+
+viewport.onwheel = function(e) {
+    let bounds = viewport.getBoundingClientRect();
+    let cx = e.clientX - bounds.left;
+    let cy = e.clientY - bounds.top;
+    let mx = 1000-(1000-(cx-tx))/zoom;
+    let my = 1000-(1000-(cy-ty))/zoom;
+
+    let oldZoom = zoom;
+
+    zoom = Math.min(14, Math.max(0, (zoom > 8 ? 2 : 1) * Math.sign(-e.deltaY) + zoom|0));
+    if (zoom === 0) {
+        zoom = 0.5;
+    }
+
+    if (zoom === oldZoom) {
+        return;
+    }
+
+    // thanks, wolframalpha! solving for mx_beforezoom=mx_afterzoom,
+    // to keep the point the mouse is hovering over invariant after the zoom.
+    tx = zoom * (1000 + tx - cx) / oldZoom + cx - 1000;
+    ty = zoom * (1000 + ty - cy) / oldZoom + cy - 1000;
+
+    canvas.style["image-rendering"] = zoom < 1 ? 'auto' : 'pixelated';
+    updateTransform();
+}
+
+// track what part of the canvas is actually visible in the viewport for faster blitting
+let cx = 0, cw = 2000, cy = 0, ch = 2000;
+
+function updateTransform() {
+    // clamp translation to canvas bounds
+    let vr = viewport.getBoundingClientRect();
+
+    let quadseen = 0xff;
+    tx = Math.min(tx, viewport.clientWidth - 20 - ((-1000 * zoom) + 1000));
+    tx = Math.max(tx, 20 - ((500 * (quadseen & 2) * zoom) + 1000));
+    ty = Math.min(ty, viewport.clientHeight - 20 - vr.top - ((-1000 * zoom) + 1000));
+    ty = Math.max(ty, 20 - ((250 * (quadseen & 4) * zoom) + 1000));
+
+    canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
+
+    let cr = canvas.getBoundingClientRect();
+    cx = Math.max(0, ((-cr.x / zoom)|0)-1);
+    cw = Math.min(2000, ((vr.width / zoom)|0) + 3);
+    cy = Math.max(0, ((-cr.y / zoom)|0)-1);
+    ch = Math.min(2000, ((vr.height / zoom)|0) + 3);
+
+    dumpImageData();
+}
+
+function setTransform(x, y, z) {
+    if (z) {
+        zoom = z;
+    }
+    updateTransform();
+    if (x) {
+        tx += (((cx+cw/2)|0)-x)*zoom;
+    }
+    if (y) {
+        ty += (((cy+ch/2)|0)-y)*zoom;
+    }
+    updateTransform();
+}
+
+window.onresize = updateTransform;
+
+viewport.onmousemove = function(e) {
+    if (e.buttons) {
+        tx += e.movementX;
+        ty += e.movementY;
+        updateTransform();
+    }
+
+    let bounds = viewport.getBoundingClientRect();
+    let cx = e.clientX - bounds.left;
+    let cy = e.clientY - bounds.top;
+    let mx = 1000-(1000-(cx-tx))/zoom;
+    let my = 1000-(1000-(cy-ty))/zoom;
+    typeOverlay.innerText = types[pokeState[(mx|0)+(my|0)*2000]];
+}
+viewport.onmouseout = function(e) {
+    typeOverlay.innerText = "";
+}
+
+window.oncontextmenu = function() {
+    // ensure `right click -> save as` gets a whole, good canvas,
+    // not just the visible rect
+    dumpImageData(true);
+}
+
+let prePauseSpeed = '0';
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === " ") {
+        if (speed) {
+            prePauseSpeed = speedslider.value;
+            speedslider.value = "0";
+            speedslider.oninput();
+        } else if (prePauseSpeed !== '0') {
+            speedslider.value = prePauseSpeed;
+            speedslider.oninput();
+        }
+    } else if (e.key === "ArrowRight") {
+        doJump(curTs + 1);
+    } else if (e.key === "ArrowUp") {
+        doJump(curTs + 10);
+    } else if (e.key === "r" || e.key === "Enter") {
+        randomizeState();
+        dumpImageData();
+    }
+});
+
+updateTransform();
+renderLoop();
+
+</script>
+</html>
