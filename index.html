@@ -450,7 +450,7 @@ viewport.onmousemove = function(e) {
     let mx = 1000-(1000-(cx-tx))/zoom;
     let my = 1000-(1000-(cy-ty))/zoom;
     let state = pokeState[(mx|0)+(my|0)*2000];
-    if (state) {
+    if (state !== undefined) {
         typeOverlay.innerText = types[state];
     }
 }
