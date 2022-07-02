@@ -1,8 +1,52 @@
 <html>
 <head>
     <title>Pokemon Cellular Automata</title>
+    <style>
+body {
+    overflow:hidden;margin:0;background-color:black;color:white;
+}
+a { color: lightblue; }
+
+#types {
+    display: flex;
+}
+
+/* type buttons stolen from pokemondb.net */
+.type-cell {
+    display: block;
+    width: 66px;
+    height: 28px;
+    font-size: .9rem;
+    margin-bottom: 0;
+    line-height: 26px;
+    background: #dbdbdb;
+    border-radius: 4px;
+    border: 1px solid rgba(0,0,0,.2);
+    color: #fff;
+    font-weight: normal;
+    text-align: center;
+    text-shadow: 1px 1px 2px rgb(0 0 0 / 70%);
+    text-transform: uppercase;
+    transition: opacity .4s;
+    text-decoration: none;
+    box-sizing: border-box;
+    cursor: pointer;
+    font-family: "Fira Sans","Trebuchet MS",Ubuntu,Helvetica,Arial,sans-serif;
+}
+
+.disabled {
+    border: 0;
+    background-color: black !important;
+}
+    </style>
 </head>
-<body style="overflow:hidden;margin:0;background-color:black;color:white;">
+<body>
+
+<div style="margin:5px">
+    Inspired by <a href="https://twitter.com/matthen2/status/1543226572592783362">this tweet.</a> Controls: mouse to move, scroll-wheel to zoom, spacebar to pause, n to step, r to reset.
+    <div id="types"></div>
+</div>
+
 <div style="margin:5px;display:flex;display:none;">
     <span id="speed" style="width:5em;text-align:center;">5x</span>
     <input id="speedslider" type="range" min="0" list="steplist" max="200" value="100" style="flex-grow:1;display:inline;" draggable="false">
@@ -68,7 +112,41 @@ function findWinner(a, b, c, d, e) {
 
 const nTypes = types.length;
 
-console.log(nTypes);
+const typeDisabled = new Uint8Array(nTypes);
+let typeDiv = document.querySelector("#types");
+for (let i = 0; i < nTypes; i++) {
+    let a = document.createElement("a");
+    a.className = "type-cell";
+    a.innerText = types[i];
+    a.style.backgroundColor = palette[i];
+    typeDiv.appendChild(a);
+}
+typeDiv.onclick = function(e) {
+    let targ = e.target;
+    if (!targ.classList.contains("type-cell")) {
+        return;
+    }
+    targ.classList.toggle("disabled");
+    let i = types.indexOf(targ.innerText.toLowerCase());
+    let dis = targ.classList.contains("disabled");
+    typeDisabled[i] = dis;
+
+    nextPokeState = pokeState.slice(0);
+
+    console.log(i, targ.innerText, dis);
+
+    if (dis) {
+        for (let y = 0; y < 2000; y++) {
+            for (let x = 0; x < 2000; x++) {
+                while (typeDisabled[nextPokeState[x + y * 2000]]) {
+                    setPixel(x, y, (Math.random() * nTypes) | 0);
+                }
+            }
+        }
+    }
+    [pokeState, nextPokeState] = [nextPokeState, pokeState];
+    dumpImageData();
+}
 
 const transitions = new Uint8Array(Math.pow(nTypes, 5));
 
@@ -196,7 +274,9 @@ function setPixel(x, y, col) {
 function randomizeState() {
     for (let y = 0; y < 2000; y++) {
         for (let x = 0; x < 2000; x++) {
-            setPixel(x, y, (Math.random() * nTypes) | 0);
+            do {
+                setPixel(x, y, (Math.random() * nTypes) | 0);
+            } while (typeDisabled[nextPokeState[x + y * 2000]]);
         }
     }
     [pokeState, nextPokeState] = [nextPokeState, pokeState];
@@ -394,7 +474,7 @@ document.addEventListener('keydown', function(e) {
             speedslider.value = prePauseSpeed;
             speedslider.oninput();
         }
-    } else if (e.key === "ArrowRight") {
+    } else if (e.key === "ArrowRight" || e.key === "n") {
         doJump(curTs + 1);
     } else if (e.key === "ArrowUp") {
         doJump(curTs + 10);
