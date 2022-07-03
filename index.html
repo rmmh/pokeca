@@ -258,6 +258,7 @@ instrDiv.onchange = function(e) {
         worldgen = targ.value;
         randomizeState();
     }
+    targ.blur();
     updateUrl();
 }
 
@@ -275,6 +276,7 @@ instrDiv.onclick = function(e) {
         }
         randomizeState();
     }
+    targ.blur();
 }
 
 var typeDisabled = 0;
