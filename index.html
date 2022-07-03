@@ -260,6 +260,15 @@ instrDiv.onchange = function(e) {
     updateUrl();
 }
 
+instrDiv.onclick = function(e) {
+    let targ = e.target;
+    if (targ.id === "pause") {
+        toggleSpeed();
+    } else if (targ.id === "reset") {
+        randomizeState();
+    }
+}
+
 var typeDisabled = 0;
 let typeDiv = document.querySelector("#types");
 for (let i = 0; i < nTypes; i++) {
@@ -460,6 +469,7 @@ function randomizeState() {
         }
     }
     [pokeState, nextPokeState] = [nextPokeState, pokeState];
+    dumpImageData();
 }
 
 
@@ -622,23 +632,26 @@ window.oncontextmenu = function() {
 
 let prePauseSpeed = '0';
 
+function toggleSpeed() {
+    if (speed) {
+        prePauseSpeed = speedslider.value;
+        speedslider.value = "0";
+        speedslider.oninput();
+    } else if (prePauseSpeed !== '0') {
+        speedslider.value = prePauseSpeed;
+        speedslider.oninput();
+    }
+}
+
 document.addEventListener('keydown', function(e) {
     if (e.key === " ") {
-        if (speed) {
-            prePauseSpeed = speedslider.value;
-            speedslider.value = "0";
-            speedslider.oninput();
-        } else if (prePauseSpeed !== '0') {
-            speedslider.value = prePauseSpeed;
-            speedslider.oninput();
-        }
+        toggleSpeed();
     } else if (e.key === "ArrowRight" || e.key === "n") {
         doJump(curTs + 1);
     } else if (e.key === "ArrowUp") {
         doJump(curTs + 10);
     } else if (e.key === "r" || e.key === "Enter") {
         randomizeState();
-        dumpImageData();
     }
 });
 
