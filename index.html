@@ -49,7 +49,7 @@ a { color: lightblue; }
     <a href="https://github.com/rmmh/pokeca">Source code.</a>
     <br>
     Winner <select id="winstrat"><option value="h">most health</option><option value="d">most damage</option></select>
-    Worldgen <select id="spawnkind"><option value="r">random</option><option value="c">clustered</option></select>
+    Worldgen <select id="spawnkind"><option value="r">random</option><option value="4">blocks</option><option value="c">clustered</option></select>
     <div id="types"></div>
 </div>
 
@@ -356,6 +356,18 @@ function randomizeState() {
                         }
                     }
                 }
+            }
+        }
+    }  else if (worldgen === "4") {
+        for (let y = 0; y < dim; y += 4) {
+            for (let x = 0; x < dim; x += 4) {
+                let i;
+                do {
+                    i = (Math.random() * nTypes) | 0;
+                } while (typeDisabled & (1 << i));
+                for (let oy = 0; oy < 4; oy++)
+                    for (let ox = 0; ox < 4; ox++)
+                        setPixel(x + ox, y + oy, i);
             }
         }
     } else if (worldgen === "r" || true) {
