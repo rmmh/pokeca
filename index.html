@@ -48,7 +48,11 @@ a { color: lightblue; }
     Controls: mouse to move, scroll-wheel to zoom, spacebar to <button id="pause">pause</button>, n to step, r to <button id="reset">reset</button>.
     <a href="https://github.com/rmmh/pokeca">Source code.</a>
     <br>
-    Winner <select id="winstrat"><option value="h">most health</option><option value="d">most damage</option></select>
+    Winner <select id="winstrat">
+        <option value="h">most health</option>
+        <option value="d">most damage</option>
+        <option value="t">tournament</option>
+    </select>
     Worldgen <select id="spawnkind"><option value="r">random</option><option value="4">blocks</option><option value="c">clustered</option></select>
     <div id="types"></div>
 </div>
@@ -133,9 +137,43 @@ function winnerMostDamage(a, b, c, d, e) {
     if (best == eDmg) return e;
 }
 
+function winnerTournament(a, b, c, d, e) {
+    let tys = [c, a, b, d, e];
+    let health = [64, 64, 64, 64, 64];
+
+    if (a == b && b == c && c == d && d == e) {
+        return a; // trivially
+    }
+
+    // each entrant does one attack on each other entrant
+    // if any other entrant's health drops <= 0, they are eliminated
+    let i = 0, roundDamage = 1;
+    while (tys.length > 1 && roundDamage > 0) {
+        roundDamage = 0;
+        for (let j = 0; j < tys.length; ) {
+            if (i == j) { j++; continue; }
+            let dmg = adv[tys[i]][tys[j]]
+            health[j] -= dmg;
+            roundDamage += dmg;
+            if (health[j] <= 0) {
+                tys[j] = tys[tys.length-1];
+                tys.pop();
+                health[j] = health[health.length-1];
+                health.pop();
+                if (i > j) {
+                    i--;
+                }
+            } else {
+                j++;
+            }
+        }
+        i = (i + 1) % tys.length;
+    }
+
+    return tys[0];
+}
 
 const nTypes = types.length;
-
 const transitions = new Uint8Array(Math.pow(nTypes, 5));
 
 function transOffset(a, b, c, d, e) {
@@ -148,15 +186,57 @@ function initTransitions() {
     default:
     case 'h': findWinner = winnerMostHealth; winner = 'h'; break;
     case 'd': findWinner = winnerMostDamage; break;
+    case 't': findWinner = winnerTournament; break;
     }
-    for (let a = 0; a < nTypes; a++) {
-        for (let b = 0; b < nTypes; b++) {
-            for (let c = 0; c < nTypes; c++) {
-                for (let d = 0; d < nTypes; d++) {
-                    for (let e = 0; e < nTypes; e++) {
-                        let win = findWinner(a, b, c, d, e);
-                        // console.log(types[a], types[b], types[c], types[d], types[e], '=>', types[win]);
-                        transitions[transOffset(a, b, c, d, e)] = win;
+    if (winner === 't') {
+        // this is gross, but the tournament code is slow.
+        // use permutations of neighbors to forcibly evaluate the tournament only once?
+        for (let c = 0; c < nTypes; c++) {
+            for (let a = 0; a < nTypes; a++) {
+                for (let b = a; b < nTypes; b++) {
+                    for (let d = b; d < nTypes; d++) {
+                        for (let e = d; e < nTypes; e++) {
+                            let win = findWinner(a, b, c, d, e);
+                            // console.log(types[a], types[b], types[c], types[d], types[e], '=>', types[win]);
+                            transitions[transOffset(a, b, c, d, e)] = win;
+                            transitions[transOffset(a, b, c, e, d)] = win;
+                            transitions[transOffset(a, d, c, b, e)] = win;
+                            transitions[transOffset(a, d, c, e, b)] = win;
+                            transitions[transOffset(a, e, c, b, d)] = win;
+                            transitions[transOffset(a, e, c, d, b)] = win;
+                            transitions[transOffset(b, a, c, d, e)] = win;
+                            transitions[transOffset(b, a, c, e, d)] = win;
+                            transitions[transOffset(b, d, c, a, e)] = win;
+                            transitions[transOffset(b, d, c, e, a)] = win;
+                            transitions[transOffset(b, e, c, a, d)] = win;
+                            transitions[transOffset(b, e, c, d, a)] = win;
+                            transitions[transOffset(d, a, c, b, e)] = win;
+                            transitions[transOffset(d, a, c, e, b)] = win;
+                            transitions[transOffset(d, b, c, a, e)] = win;
+                            transitions[transOffset(d, b, c, e, a)] = win;
+                            transitions[transOffset(d, e, c, a, b)] = win;
+                            transitions[transOffset(d, e, c, b, a)] = win;
+                            transitions[transOffset(e, a, c, b, d)] = win;
+                            transitions[transOffset(e, a, c, d, b)] = win;
+                            transitions[transOffset(e, b, c, a, d)] = win;
+                            transitions[transOffset(e, b, c, d, a)] = win;
+                            transitions[transOffset(e, d, c, a, b)] = win;
+                            transitions[transOffset(e, d, c, b, a)] = win;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        for (let a = 0; a < nTypes; a++) {
+            for (let b = 0; b < nTypes; b++) {
+                for (let c = 0; c < nTypes; c++) {
+                    for (let d = 0; d < nTypes; d++) {
+                        for (let e = 0; e < nTypes; e++) {
+                            let win = findWinner(a, b, c, d, e);
+                            // console.log(types[a], types[b], types[c], types[d], types[e], '=>', types[win]);
+                            transitions[transOffset(a, b, c, d, e)] = win;
+                        }
                     }
                 }
             }
@@ -393,7 +473,6 @@ function applyStep() {
             let a = getType(x, y - 1), b = getType(x - 1, y), c = getType(x, y), d = getType(x + 1, y), e = getType(x, y + 1);
             let next = transitions[transOffset(a, b, c, d, e)];
             setPixel(x, y, next);
-
         }
     }
 
@@ -640,6 +719,20 @@ initTransitions();
 randomizeState();
 updateTransform();
 renderLoop();
+
+function buf2hex(buffer) { // buffer is an ArrayBuffer
+  return [...new Uint8Array(buffer)]
+      .map(x => x.toString(16).padStart(2, '0'))
+      .join('');
+}
+
+async function sha1(buf) {
+    return buf2hex(await crypto.subtle.digest("SHA-1", buf));
+}
+
+(async function(){
+console.log('transition hash:', await sha1(transitions));
+})();
 
 </script>
 </html>
