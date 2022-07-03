@@ -42,11 +42,14 @@ a { color: lightblue; }
 </head>
 <body>
 
-<div style="margin:5px">
+<div style="margin:5px" id="instr">
     Inspired by <a href="https://twitter.com/matthen2/status/1543226572592783362">this tweet.</a>
     Based on <a href="https://pokemondb.net/type">Pokémon type weaknesses</a>.
-    Controls: mouse to move, scroll-wheel to zoom, spacebar to pause, n to step, r to reset.
+    Controls: mouse to move, scroll-wheel to zoom, spacebar to <button id="pause">pause</button>, n to step, r to <button id="reset">reset</button>.
     <a href="https://github.com/rmmh/pokeca">Source code.</a>
+    <br>
+    Winner <select id="winstrat"><option value="h">most health</option><option value="d">most damage</option></select>
+    Worldgen <select id="spawnkind"><option value="r">random</option><option value="c">clustered</option></select>
     <div id="types"></div>
 </div>
 
@@ -98,8 +101,7 @@ const adv = [
     [2,1,2,2,2,2,4,1,2,2,2,2,2,2,4,4,1,2],
 ];
 
-
-function findWinner(a, b, c, d, e) {
+function winnerMostHealth(a, b, c, d, e) {
     let aDmg = adv[b][a] + adv[c][a] + adv[d][a] + adv[e][a];
     let bDmg = adv[a][b] + adv[c][b] + adv[d][b] + adv[e][b];
     let cDmg = adv[a][c] + adv[b][c] + adv[d][c] + adv[e][c];
@@ -115,7 +117,68 @@ function findWinner(a, b, c, d, e) {
     if (best == eDmg) return e;
 }
 
+function winnerMostDamage(a, b, c, d, e) {
+    let aDmg = adv[a][b] + adv[a][c] + adv[a][d] + adv[a][e];
+    let bDmg = adv[b][a] + adv[b][c] + adv[b][d] + adv[b][e];
+    let cDmg = adv[c][a] + adv[c][b] + adv[c][d] + adv[c][e];
+    let dDmg = adv[d][a] + adv[d][b] + adv[d][c] + adv[d][e];
+    let eDmg = adv[e][a] + adv[e][b] + adv[e][c] + adv[e][d];
+
+    let best = Math.min(aDmg, bDmg, cDmg, dDmg, eDmg);
+
+    if (best == cDmg) return c;  // prefer center
+    if (best == aDmg) return a;
+    if (best == bDmg) return b;
+    if (best == dDmg) return d;
+    if (best == eDmg) return e;
+}
+
+
 const nTypes = types.length;
+
+const transitions = new Uint8Array(Math.pow(nTypes, 5));
+
+function transOffset(a, b, c, d, e) {
+    return e + nTypes * (d + nTypes * (c + nTypes * (b + nTypes * a)));
+}
+
+function initTransitions() {
+    var findWinner;
+    switch(winner) {
+    default:
+    case 'h': findWinner = winnerMostHealth; winner = 'h'; break;
+    case 'd': findWinner = winnerMostDamage; break;
+    }
+    for (let a = 0; a < nTypes; a++) {
+        for (let b = 0; b < nTypes; b++) {
+            for (let c = 0; c < nTypes; c++) {
+                for (let d = 0; d < nTypes; d++) {
+                    for (let e = 0; e < nTypes; e++) {
+                        let win = findWinner(a, b, c, d, e);
+                        // console.log(types[a], types[b], types[c], types[d], types[e], '=>', types[win]);
+                        transitions[transOffset(a, b, c, d, e)] = win;
+                    }
+                }
+            }
+        }
+    }
+}
+
+var winner = 'h';
+var worldgen = 'r';
+
+let instrDiv = document.querySelector("#instr");
+instrDiv.onchange = function(e) {
+    let targ = e.target;
+    if (targ.id === "winstrat") {
+        winner = targ.value;
+        initTransitions();
+    } else if (targ.id === "spawnkind") {
+        worldgen = targ.value;
+        randomizeState();
+    }
+    updateUrl();
+}
 
 var typeDisabled = 0;
 let typeDiv = document.querySelector("#types");
@@ -161,26 +224,6 @@ typeDiv.onclick = function(e) {
     [pokeState, nextPokeState] = [nextPokeState, pokeState];
     dumpImageData();
     updateUrl();
-}
-
-const transitions = new Uint8Array(Math.pow(nTypes, 5));
-
-function transOffset(a, b, c, d, e) {
-    return e + nTypes * (d + nTypes * (c + nTypes * (b + nTypes * a)));
-}
-
-for (let a = 0; a < nTypes; a++) {
-    for (let b = 0; b < nTypes; b++) {
-        for (let c = 0; c < nTypes; c++) {
-            for (let d = 0; d < nTypes; d++) {
-                for (let e = 0; e < nTypes; e++) {
-                    let win = findWinner(a, b, c, d, e);
-                    // console.log(types[a], types[b], types[c], types[d], types[e], '=>', types[win]);
-                    transitions[transOffset(a, b, c, d, e)] = win;
-                }
-            }
-        }
-    }
 }
 
 const pal = [];
@@ -287,11 +330,41 @@ function setPixel(x, y, col) {
 }
 
 function randomizeState() {
-    for (let y = 0; y < dim; y++) {
-        for (let x = 0; x < dim; x++) {
-            do {
-                setPixel(x, y, (Math.random() * nTypes) | 0);
-            } while (typeDisabled & (1 << nextPokeState[x + y * dim]));
+    if (worldgen === "c") {
+        var first = -1;
+        for (let j = 0; j < 200; j++) {
+            for (let i = 0; i < nTypes; i++) {
+                if (typeDisabled & (1 << i)) {
+                    continue;
+                }
+                if (first === -1) {
+                    first = i;
+                    for (let y = 0; y < dim; y++) {
+                        for (let x = 0; x < dim; x++) {
+                            setPixel(x, y, i);
+                        }
+                    }
+                } else {
+                    const width = (Math.random() * 30)|0;
+                    const border = width;
+                    let cx = border + (Math.random()*(dim - 2 * border))|0;
+                    let cy = border + (Math.random()*(dim - 2 * border))|0;
+                    for (let y = -width; y < width; y++) {
+                        for (let x = -width; x < width; x++) {
+                            if (x * x + y * y < width * width)
+                                setPixel(cx + x, cy + y, i);
+                        }
+                    }
+                }
+            }
+        }
+    } else if (worldgen === "r" || true) {
+        for (let y = 0; y < dim; y++) {
+            for (let x = 0; x < dim; x++) {
+                do {
+                    setPixel(x, y, (Math.random() * nTypes) | 0);
+                } while (typeDisabled & (1 << nextPokeState[x + y * dim]));
+            }
         }
     }
     [pokeState, nextPokeState] = [nextPokeState, pokeState];
@@ -506,6 +579,12 @@ function updateUrl() {
                 }
             }
         }
+        if (winner != "h") {
+            prefix += "r" + winner.toUpperCase();
+        }
+        if (worldgen != "r") {
+            prefix += "g" + worldgen.toUpperCase();
+        }
         history.replaceState(null, "", `${prefix}z${zoom}`)
     }, 200);
 
@@ -518,6 +597,8 @@ if (document.location.hash) {
         case 'x': x = +m[2]; break;
         case 'y': y = +m[2]; break;
         case 'z': z = +m[2]; break;
+        case 'r': winner = m[2].toLowerCase(); initTransitions(); winstrat.value = winner; break;
+        case 'g': worldgen = m[2].toLowerCase(); break;
         case 't': {
             let t = m[2];
             if (t[0] == "~") {
@@ -543,6 +624,7 @@ if (document.location.hash) {
     updateTransform();
 }
 
+initTransitions();
 randomizeState();
 updateTransform();
 renderLoop();
