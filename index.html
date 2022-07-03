@@ -54,6 +54,7 @@ a { color: lightblue; }
         <option value="t">tournament</option>
     </select>
     Worldgen <select id="spawnkind"><option value="r">random</option><option value="4">blocks</option><option value="c">clustered</option></select>
+    <button id="randomizetypes">Randomize Types</button>
     <div id="types"></div>
 </div>
 
@@ -265,6 +266,13 @@ instrDiv.onclick = function(e) {
     if (targ.id === "pause") {
         toggleSpeed();
     } else if (targ.id === "reset") {
+        randomizeState();
+    } else if (targ.id === "randomizetypes") {
+        for (let type of types) {
+            if (Math.random() < 0.5) {
+                toggleType(type);
+            }
+        }
         randomizeState();
     }
 }
