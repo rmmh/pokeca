@@ -124,7 +124,7 @@ function winnerMostDamage(a, b, c, d, e) {
     let dDmg = adv[d][a] + adv[d][b] + adv[d][c] + adv[d][e];
     let eDmg = adv[e][a] + adv[e][b] + adv[e][c] + adv[e][d];
 
-    let best = Math.min(aDmg, bDmg, cDmg, dDmg, eDmg);
+    let best = Math.max(aDmg, bDmg, cDmg, dDmg, eDmg);
 
     if (best == cDmg) return c;  // prefer center
     if (best == aDmg) return a;
