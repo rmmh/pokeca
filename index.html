@@ -683,7 +683,7 @@ function updateUrl() {
 
 if (document.location.hash) {
     let x = null, y = null, z = null;
-    for (const m of document.location.hash.matchAll(/([a-z])(-?[0-9]+|~?[A-Z]+)/g)) {
+    for (const m of decodeURI(document.location.hash).matchAll(/([a-z])(-?[0-9]+|~?[A-Z]+)/g)) {
         switch (m[1]) {
         case 'x': x = +m[2]; break;
         case 'y': y = +m[2]; break;
