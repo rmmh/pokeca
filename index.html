@@ -570,10 +570,16 @@ viewport.onwheel = function(e) {
 
     let oldZoom = zoom;
 
-    zoom = Math.min(14, Math.max(0, (zoom > 8 ? 2 : 1) * Math.sign(-e.deltaY) + zoom|0));
-    if (zoom === 0) {
-        zoom = 0.5;
+    const zoomLevels = [0.5, 1, 2, 3, 4, 6, 8, 12, 16, 24, 40, 80];
+    let i = zoomLevels.indexOf(zoom);
+    if (i == -1) {
+        i = 1;
     }
+    i += Math.sign(-e.deltaY);
+    if (i < 0 || i >= zoomLevels.length) {
+        return;
+    }
+    zoom = zoomLevels[i];
 
     if (zoom === oldZoom) {
         return;
