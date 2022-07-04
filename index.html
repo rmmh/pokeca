@@ -56,18 +56,11 @@ a { color: lightblue; }
     </select>
     Worldgen <select id="spawnkind"><option value="r">random</option><option value="4">blocks</option><option value="c">clustered</option></select>
     <button id="randomizetypes">Randomize Types</button>
+    <input id="speedslider" type="range" min="0" max="8" value="4" style="display:inline;" draggable="false">
+    <span id="speed" style="width:200px;text-align:center;display:inline">5x</span>
     <div id="types"></div>
 </div>
 
-<div style="margin:5px;display:flex;display:none;">
-    <span id="speed" style="width:5em;text-align:center;">5x</span>
-    <input id="speedslider" type="range" min="0" list="steplist" max="200" value="100" style="flex-grow:1;display:inline;" draggable="false">
-    <datalist id="steplist">
-        <option>0</option>
-        <option>100</option>
-        <option>200</option>
-    </datalist>
-</div>
 <div id="viewport" style="height:100%;user-select:none;overflow:clip">
     <canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="1000" height="1000" ondragstart="return false">
 </div>
@@ -371,23 +364,18 @@ for (let c of palette) {
 }
 
 let speed = 1;
-let speedticks = 0;
 
 function calcSpeed() {
-    let val = speedslider.value/10;
-    speedticks = 0;
-    if (val < 10) {
-        return val/10;
-    } else {
-        return Math.pow(2, val-10);
-    }
+    let val = +speedslider.value;
+    return [0, 30, 15, 10, 6, 4, 3, 2, 1][val];
+    return val;
 }
 
 speedslider.oninput = function() {
     let newSpeed = calcSpeed();
     speed = newSpeed;
-    let s = speed;
-    document.getElementById("speed").innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
+    let s = 60 / speed;
+    document.getElementById("speed").innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "fps";
 }
 speedslider.oninput();
 
@@ -539,8 +527,6 @@ function applyStep() {
 }
 
 async function renderLoop() {
-    let lastSleep = 0;
-
     while (true) {
         while (nextEventLock || speed === 0) {
             // seek operation in progress
@@ -553,18 +539,12 @@ async function renderLoop() {
 
         nextEventLock = 0;
 
-        if (Math.abs(curTs - lastSleep) > Math.abs(speed) || true) {
-            dumpImageData();
+        dumpImageData();
+        for (let i = 0; i < speed; i++) {
             await sleepFrame();
-            while (speed == 0) {
-                await sleepFrame();
-            }
-            if (Math.abs(speed) < 100 && speedticks > 30) {
-                let slack = Math.min(1500, Math.abs((curTs - lastSleep) / (60*speed/1000)));
-                await sleep(slack);
-            }
-            speedticks++;
-            lastSleep = curTs;
+        }
+        while (speed == 0) {
+            await sleepFrame();
         }
     }
     dumpImageData();
