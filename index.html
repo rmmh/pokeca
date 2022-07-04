@@ -52,6 +52,7 @@ a { color: lightblue; }
         <option value="h">most health</option>
         <option value="d">most damage</option>
         <option value="t">tournament</option>
+        <option value="p">points</option>
     </select>
     Worldgen <select id="spawnkind"><option value="r">random</option><option value="4">blocks</option><option value="c">clustered</option></select>
     <button id="randomizetypes">Randomize Types</button>
@@ -177,6 +178,38 @@ function winnerTournament(a, b, c, d, e) {
     return tys[0];
 }
 
+function winnerPoints(a, b, c, d, e) {
+    let tys = [c, a, b, d, e];
+    let scores = [];
+
+    // Simulate 1v1 matches between each type
+    // A win (doing more damage) is worth 2 points,
+    // A draw (equal damage) is worth 2 points.
+    // A loss is worth 0 points.
+    //
+    // The winner has the most points, ties towards center.
+    for (let i = 0; i < tys.length; i++) {
+        let score = 0;
+        for (let j = 0; j < tys.length; j++) {
+            if (j == i) continue;
+            let diff = adv[tys[i]][tys[j]] - adv[tys[j]][tys[i]];
+            if (diff > 0) {
+                score += 2;
+            } else if (diff == 0) {
+                score += 1;
+            }
+        }
+        scores.push(score);
+    }
+
+    let win = Math.max(...scores);
+    for (let i = 0; i < tys.length; i++) {
+        if (scores[i] === win) {
+            return tys[i];
+        }
+    }
+}
+
 const nTypes = types.length;
 const transitions = new Uint8Array(Math.pow(nTypes, 5));
 
@@ -191,6 +224,7 @@ function initTransitions() {
     case 'h': findWinner = winnerMostHealth; winner = 'h'; break;
     case 'd': findWinner = winnerMostDamage; break;
     case 't': findWinner = winnerTournament; break;
+    case 'p': findWinner = winnerPoints; break;
     }
     if (winner === 't') {
         // this is gross, but the tournament code is slow.
