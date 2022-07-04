@@ -79,7 +79,10 @@ a { color: lightblue; }
 const dim = canvas.width;
 
 const types = ["normal", "fire", "water", "electric", "grass", "ice", "fighting", "poison", "ground", "flying", "psychic", "bug", "rock", "ghost", "dragon", "dark", "steel", "fairy"];
-const palette = ['#A8A77A', '#EE8130', '#6390F0', '#F7D02C', '#7AC74C', '#96D9D6', '#C22E28', '#A33EA1', '#E2BF65', '#A98FF3', '#F95587', '#A6B91A', '#B6A136', '#735797', '#6F35FC', '#705746', '#B7B7CE', '#D685AD'];
+// colors extracted from GBA FireRed/LeafGreen sprites here https://www.spriters-resource.com/fullview/64370/
+// also used Switch Sword/Shield sprites https://www.spriters-resource.com/nintendo_switch/pokemonswordshield/sheet/123715/
+// plus some finessing to make them more contrasty vOv
+const palette = ['#a8a878', '#f08030', '#6890f0', '#f4d23c', '#63bc5a', '#73cec0', '#e83000', '#aa6bc8', '#E2BF65', '#8fa9de', '#f85888', '#A6B91A', '#b8a038', '#735797', '#6F35FC', '#507888', '#B7B7CE', '#D685AD'];
 
 // https://pokemondb.net/type
 // JSON.stringify([...document.querySelectorAll(".type-table tr")].map(x=>[...x.querySelectorAll("td")].map(x=>+x.className.split(/-/)[4]/10)))
