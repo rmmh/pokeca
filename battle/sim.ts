@@ -3,7 +3,8 @@ import {sortBy} from './util';
 
 import * as pkmn from '@pkmn/sets';
 
-const dex = Dex.forGen(3);
+const gen = 1;
+const dex = Dex.forGen(gen);
 
 var numToSpecies : Map<Number, Species> = new Map();
 
@@ -12,6 +13,12 @@ for (const species of dex.species.all()) {
     numToSpecies.set(species.num, species);
 }
 
+// MakeSimpleTeam is very simple: it makes a single level 100 pokemon
+// of the given number with moves based on the last 4 moves available from
+// level ups, maxed IVs/EVs, no items, and a neutral nature.
+//
+// This is nowhere near the optimal for each species, but it approximates
+// what wild encounters look like, and is sufficient as a baseline.
 function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
   let species = numToSpecies.get(num)!;
 
@@ -30,14 +37,14 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
     }
     */
     for (const source of x[1]) {
-      if (source.startsWith('3L')) return true;
+      if (source.startsWith(gen + 'L')) return true;
     }
     return false;
   }));
   let learnedLevel: {[key: string]: number} = {};
   for (const [move, v] of Object.entries(learnSet)) {
     for (const source of v) {
-      if (source.startsWith('3L')) {
+      if (source.startsWith(gen + 'L')) {
         learnedLevel[move] = +source.slice(2);
       }
     }
@@ -48,7 +55,7 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
   // console.log(movePool);
   const moves = new Set<string>(movePool.slice(0, 4));
   const evs = { hp: 85, atk: 85, def: 85, spa: 85, spd: 85, spe: 85 };
-  const ivs = { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 };
+  const ivs = gen <= 2 ? {hp: 30, atk: 30, def: 30, spa: 30, spd: 15, spe: 30} : { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 };
   let availableHP = 0;
   for (const setMoveid of movePool) {
     if (setMoveid.startsWith('hiddenpower')) availableHP++;
@@ -77,7 +84,7 @@ async function ComputeResult(pokeA: number, pokeB: number, seed: number, debug?:
   const prng = new PRNG([seed,2,3,4]);
   const battlestream = new BattleStreams.BattleStream();
   const streams = BattleStreams.getPlayerStreams(battlestream);
-  const spec = {formatid: 'gen3customgame', seed: prng.startingSeed};
+  const spec = {formatid: `gen${gen}customgame`, seed: prng.startingSeed};
 
   // Teams.setGeneratorFactory(TeamGenerators);
   //const p1spec = {name: 'Bot 1', team: Teams.pack(Teams.generate('gen7randombattle'))};
@@ -100,7 +107,6 @@ async function ComputeResult(pokeA: number, pokeB: number, seed: number, debug?:
       console.log(chunk);
   }
   if (debug) {
-    //console.log(battlestream.battle?.prngSeed);
     console.log(battlestream.battle?.inputLog);
   }
   let log = battlestream.battle!.log;
@@ -134,5 +140,5 @@ async function ComputeWinProbabilities() {
   }
 }
 
-//ComputeResult(1, 93, 1, true);
+// ComputeResult(150, 151, 1, true);
 ComputeWinProbabilities();
