@@ -1,6 +1,7 @@
 import PIL.Image
 import PIL.ImageDraw
 import matplotlib.pyplot as plt
+import sys
 
 spritesize = 24
 count = 151
@@ -24,7 +25,8 @@ for mon in range(1, count + 1):
 
 cm = plt.get_cmap('inferno')
 dr = PIL.ImageDraw.Draw(im)
-for line in open("results"):
+
+for line in open(sys.argv[1] if len(sys.argv) > 1 else "results"):
     line = line.strip()
     if "vs" in line:
         continue
@@ -33,13 +35,15 @@ for line in open("results"):
     mx = 16
     my = 6
 
-    dr.rectangle((mx + (a) * spritesize, my + (a) * spritesize,
-                  mx + (a + 1) * spritesize - 1, my + (a + 1) * spritesize - 1),
-        tuple(int(x * 255) for x in cm.colors[128]))
+    for s in (a, b):
+        dr.rectangle((mx + (s) * spritesize, my + (s) * spritesize,
+                    mx + (s + 1) * spritesize - 1, my + (s + 1) * spritesize - 1),
+            tuple(int(x * 255) for x in cm.colors[128]))
 
     dr.rectangle((mx + (a) * spritesize, my + (b) * spritesize,
                   mx + (a + 1) * spritesize - 1, my + (b + 1) * spritesize - 1),
         tuple(int(x * 255) for x in cm.colors[int((loss+tie/2)*255/100)]))
+
     dr.rectangle((mx + (b) * spritesize, my + (a) * spritesize,
                   mx + (b + 1) * spritesize - 1, my + (a + 1) * spritesize - 1),
         tuple(int(x * 255) for x in cm.colors[int((win+tie/2)*255/100)]))
