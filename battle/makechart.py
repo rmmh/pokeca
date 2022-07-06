@@ -1,10 +1,132 @@
 import PIL.Image
 import PIL.ImageDraw
 import matplotlib.pyplot as plt
-import sys
+import matplotlib.colors
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--tiers', nargs='*')
+parser.add_argument('--color', default='coolwarm')
+parser.add_argument('--order', choices=['greedy', 'tsp'])
+parser.add_argument('infile', nargs='?', default='results')
+parser.add_argument('outfile', nargs='?', default='results.png')
+opts = parser.parse_args()
 
 spritesize = 24
-count = 151
+
+entries = {}
+data = [[None] * 152 for _ in range(152)]
+
+for line in open(opts.infile):
+    line = line.strip()
+    if 'lvl' in line:
+        parts = line.split()
+        entries[int(parts[0])] = parts[1:]
+    if 'vs' in line or 'lvl' in line:
+        continue
+    a, b, win, loss, tie = [int(x) for x in line.split()]
+
+    mx = 16
+    my = 6
+
+    for s in (a, b):
+        data[a][a] = .5
+        data[b][b] = .5
+
+    data[a][b] = (loss+tie/2)/100
+    data[b][a] = (win+tie/2)/100
+
+def cosine_similarity(xs, ys):
+    sumxx, sumxy, sumyy = 0, 0, 0
+    for x, y in zip(xs, ys):
+        sumxx += x*x
+        sumyy += y*y
+        sumxy += x*y
+    return sumxy/(sumxx**.5*sumyy**.5)
+
+order = list(range(1, 152))
+if opts.order == 'greedy':
+    todo = set(range(2, 152))
+    cur = 1
+    order = [1]
+    while todo:
+        nextNum = max(todo, key=lambda x: cosine_similarity(data[cur][1:], data[x][1:]))
+        order.append(nextNum)
+        todo.remove(nextNum)
+        cur = nextNum
+elif opts.order == 'tsp':
+    from ortools.constraint_solver import routing_enums_pb2
+    from ortools.constraint_solver import pywrapcp
+
+    start = 150
+    manager = pywrapcp.RoutingIndexManager(151, 1, start)
+    routing = pywrapcp.RoutingModel(manager)
+
+    dcache = {}
+    def dist(a, b):
+        a = manager.IndexToNode(a)
+        b = manager.IndexToNode(b)
+        assert 0 <= a < 151
+        assert 0 <= b < 151
+
+        if b == start:
+            return 0
+
+        if (a, b) not in dcache:
+            xs = data[a+1][1:]
+            ys = data[b+1][1:]
+            d = 0
+            d += 5*abs(sum(xs)-sum(ys))
+            d += 200*sum(abs(x-y) for x, y in zip(xs, ys))
+            d += min(abs(a-b) ** 2, 25) + 50*(a<b)
+            dcache[(a,b)] = d
+
+        return dcache[(a,b)]
+
+        #return 100 - 10 * cosine_similarity(data[a+1][1:], data[b+1][1:])
+
+    cb = routing.RegisterTransitCallback(dist)
+    routing.SetArcCostEvaluatorOfAllVehicles(cb)
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
+    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
+    # search_parameters.use_or_opt = True
+    search_parameters.time_limit.seconds = 30
+    search_parameters.log_search = True
+    search_parameters.solution_limit = 10000
+    search_parameters.local_search_operators.use_relocate_neighbors = pywrapcp.BOOL_TRUE
+    search_parameters.local_search_operators.use_cross_exchange = pywrapcp.BOOL_TRUE
+
+    print(search_parameters)
+
+    solution = routing.SolveWithParameters(search_parameters)
+
+    order = []
+
+    # Print solution on console.
+    index = routing.Start(0)
+    order.append(manager.IndexToNode(index) + 1)
+    if solution:
+        index = routing.Start(0)
+        while not routing.IsEnd(index):
+            previous_index = index
+            index = solution.Value(routing.NextVar(index))
+            order.append(manager.IndexToNode(index) + 1)
+
+    print(order)
+
+if opts.tiers:
+    ts = [x.lower() for x in opts.tiers]
+    order = [x for x in order if entries[x][-1].lower() in ts]
+
+def remap(x):
+    try:
+        return order.index(x) + 1
+    except ValueError:
+        return 0
+
+count = len(order)
 basedim = (count + 1) * spritesize
 
 im = PIL.Image.new(mode="RGBA", size=(basedim + 16, basedim + 8), color=(128, 128, 128))
@@ -15,39 +137,33 @@ im = PIL.Image.new(mode="RGBA", size=(basedim + 16, basedim + 8), color=(128, 12
 # -geometry +0+0  -tile 16x gen1.png && gliv boxicons.png
 sp = PIL.Image.open("boxicons.png")
 
-for mon in range(1, count + 1):
+if opts.color == 'redgrayblue':
+    cm = matplotlib.colors.LinearSegmentedColormap.from_list('redgrayblue',
+        [(1, 0, 0), (.5, .5, .5), (0, 0, 1)])
+else:
+    cm = plt.get_cmap(opts.color.strip('-'))
+if opts.color.endswith('-'):
+    cm = cm.reversed()
+dr = PIL.ImageDraw.Draw(im)
+
+for n, mon in enumerate(order, 1):
     spy = ((mon - 1) // 16) * 30
     spx = ((mon - 1) % 16) * 40
     # print(mon, spx, spy)
     monsp = sp.crop((spx, spy, spx + 40, spy + 30))
-    im.alpha_composite(monsp, (0, mon * spritesize))
-    im.alpha_composite(monsp, (8 + mon * spritesize, 0))
+    im.alpha_composite(monsp, (0, n * spritesize))
+    im.alpha_composite(monsp, (8 + n * spritesize, 0))
 
-cm = plt.get_cmap('inferno')
-dr = PIL.ImageDraw.Draw(im)
+for mon, vals in enumerate(data[1:], 1):
+    a = remap(mon)
 
-for line in open(sys.argv[1] if len(sys.argv) > 1 else "results"):
-    line = line.strip()
-    if "vs" in line:
-        continue
-    a, b, win, loss, tie = [int(x) for x in line.split()]
-
-    mx = 16
-    my = 6
-
-    for s in (a, b):
-        dr.rectangle((mx + (s) * spritesize, my + (s) * spritesize,
-                    mx + (s + 1) * spritesize - 1, my + (s + 1) * spritesize - 1),
-            tuple(int(x * 255) for x in cm.colors[128]))
-
-    dr.rectangle((mx + (a) * spritesize, my + (b) * spritesize,
-                  mx + (a + 1) * spritesize - 1, my + (b + 1) * spritesize - 1),
-        tuple(int(x * 255) for x in cm.colors[int((loss+tie/2)*255/100)]))
-
-    dr.rectangle((mx + (b) * spritesize, my + (a) * spritesize,
-                  mx + (b + 1) * spritesize - 1, my + (a + 1) * spritesize - 1),
-        tuple(int(x * 255) for x in cm.colors[int((win+tie/2)*255/100)]))
+    for b, v in enumerate(vals[1:], 1):
+        b = remap(b)
+        if not a or not b:
+            continue
+        dr.rectangle((mx + (a) * spritesize, my + (b) * spritesize,
+                    mx + (a + 1) * spritesize - 1, my + (b + 1) * spritesize - 1),
+            tuple(int(x * 255) for x in cm(v)))
 
 
-
-im.save("results.png")
+im.save(opts.outfile)
