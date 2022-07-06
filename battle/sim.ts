@@ -1,12 +1,13 @@
 const fs = require('fs');
 const workerpool = require('workerpool');
+const process = require('process');
 
 import {Dex, BattleStreams, RandomPlayerAI, Teams, Species, PRNG} from '@pkmn/sim';
 import {sortBy, toID} from './util';
 
 import * as pkmn from '@pkmn/sets';
 
-const gen : number = 6;
+const gen : number = +process.env.GEN || 1;
 const dex = Dex.forGen(gen);
 
 const sets = JSON.parse(fs.readFileSync(`gen${gen}.json`)); // from https://pkmn.github.io/smogon/data/sets/gen1.json
@@ -167,6 +168,10 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
     };
     const tier = toID(species.tier).replace('bl', '');
     level = customScale[species.name] || levelScale[tier] || (species.nfe ? 90 : 80);
+  }
+
+  if (process.env.LEVEL) {
+    level = +process.env.LEVEL;
   }
 
   let learnSet = dex.species.getLearnset(species.id)!;
