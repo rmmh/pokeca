@@ -15,19 +15,29 @@ opts = parser.parse_args()
 spritesize = 24
 
 entries = {}
-data = [[None] * 152 for _ in range(152)]
+genStart = 999
+genEnd = 0
+data = None
 
 for line in open(opts.infile):
     line = line.strip()
     if 'lvl' in line:
         parts = line.split()
-        entries[int(parts[0])] = parts[1:]
+        num = int(parts[0])
+        entries[num] = parts[1:]
+        genStart = min(genStart, num)
+        genEnd = max(genEnd, num)
     if 'vs' in line or 'lvl' in line:
         continue
+    if not data:
+        data = [[None] * (genEnd - genStart + 1) for _ in range(genStart, genEnd + 1)]
     a, b, win, loss, tie = [int(x) for x in line.split()]
 
     mx = 16
     my = 6
+
+    a -= genStart
+    b -= genStart
 
     for s in (a, b):
         data[a][a] = .5
@@ -44,11 +54,11 @@ def cosine_similarity(xs, ys):
         sumxy += x*y
     return sumxy/(sumxx**.5*sumyy**.5)
 
-order = list(range(1, 152))
+order = list(range(genEnd - genStart + 1))
 if opts.order == 'greedy':
-    todo = set(range(2, 152))
+    todo = set(range(1, len(data)))
     cur = 1
-    order = [1]
+    order = [0]
     while todo:
         nextNum = max(todo, key=lambda x: cosine_similarity(data[cur][1:], data[x][1:]))
         order.append(nextNum)
@@ -58,26 +68,24 @@ elif opts.order == 'tsp':
     from ortools.constraint_solver import routing_enums_pb2
     from ortools.constraint_solver import pywrapcp
 
-    start = 150
-    manager = pywrapcp.RoutingIndexManager(151, 1, start)
+    start = 0
+    manager = pywrapcp.RoutingIndexManager(genEnd - genStart + 1, 1, start)
     routing = pywrapcp.RoutingModel(manager)
 
     dcache = {}
     def dist(a, b):
         a = manager.IndexToNode(a)
         b = manager.IndexToNode(b)
-        assert 0 <= a < 151
-        assert 0 <= b < 151
 
         if b == start:
             return 0
 
         if (a, b) not in dcache:
-            xs = data[a+1][1:]
-            ys = data[b+1][1:]
+            xs = data[a]
+            ys = data[b]
             d = 0
             d += 5*abs(sum(xs)-sum(ys))
-            d += 200*sum(abs(x-y) for x, y in zip(xs, ys))
+            d += 500*sum(abs(x-y) for x, y in zip(xs, ys))
             d += min(abs(a-b) ** 2, 25) + 50*(a<b)
             dcache[(a,b)] = d
 
@@ -93,12 +101,10 @@ elif opts.order == 'tsp':
     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
     # search_parameters.use_or_opt = True
     search_parameters.time_limit.seconds = 30
-    search_parameters.log_search = True
+    # search_parameters.log_search = True
     search_parameters.solution_limit = 10000
     search_parameters.local_search_operators.use_relocate_neighbors = pywrapcp.BOOL_TRUE
     search_parameters.local_search_operators.use_cross_exchange = pywrapcp.BOOL_TRUE
-
-    print(search_parameters)
 
     solution = routing.SolveWithParameters(search_parameters)
 
@@ -106,19 +112,18 @@ elif opts.order == 'tsp':
 
     # Print solution on console.
     index = routing.Start(0)
-    order.append(manager.IndexToNode(index) + 1)
+    order.append(manager.IndexToNode(index))
     if solution:
         index = routing.Start(0)
         while not routing.IsEnd(index):
             previous_index = index
             index = solution.Value(routing.NextVar(index))
-            order.append(manager.IndexToNode(index) + 1)
-
-    print(order)
+            order.append(manager.IndexToNode(index))
+    order.pop()  # last node is a repeat
 
 if opts.tiers:
     ts = [x.lower() for x in opts.tiers]
-    order = [x for x in order if entries[x][-1].lower() in ts]
+    order = [x for x in order if entries[x+genStart][-1].lower() in ts]
 
 def remap(x):
     try:
@@ -147,19 +152,19 @@ if opts.color.endswith('-'):
 dr = PIL.ImageDraw.Draw(im)
 
 for n, mon in enumerate(order, 1):
+    mon += genStart
     spy = ((mon - 1) // 16) * 30
     spx = ((mon - 1) % 16) * 40
-    # print(mon, spx, spy)
     monsp = sp.crop((spx, spy, spx + 40, spy + 30))
     im.alpha_composite(monsp, (0, n * spritesize))
     im.alpha_composite(monsp, (8 + n * spritesize, 0))
 
-for mon, vals in enumerate(data[1:], 1):
+for mon, vals in enumerate(data):
     a = remap(mon)
 
-    for b, v in enumerate(vals[1:], 1):
+    for b, v in enumerate(vals):
         b = remap(b)
-        if not a or not b:
+        if not a or not b or v is None:
             continue
         dr.rectangle((mx + (a) * spritesize, my + (b) * spritesize,
                     mx + (a + 1) * spritesize - 1, my + (b + 1) * spritesize - 1),

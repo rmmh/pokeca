@@ -2,25 +2,30 @@ const fs = require('fs');
 const workerpool = require('workerpool');
 
 import {Dex, BattleStreams, RandomPlayerAI, Teams, Species, PRNG} from '@pkmn/sim';
-import {sortBy} from './util';
+import {sortBy, toID} from './util';
 
 import * as pkmn from '@pkmn/sets';
 
-const gen : number = 2;
+const gen : number = 6;
 const dex = Dex.forGen(gen);
 
 const sets = JSON.parse(fs.readFileSync(`gen${gen}.json`)); // from https://pkmn.github.io/smogon/data/sets/gen1.json
 
 var numToSpecies : Map<Number, Species> = new Map();
 
-var genStart = 999;
-var genEnd = 0;
+var genStart, genEnd : number;
+switch (gen) {
+case 1: genStart = 1, genEnd = 151; break;
+case 2: genStart = 152, genEnd = 251; break;
+case 3: genStart = 252, genEnd = 386; break;
+case 4: genStart = 387, genEnd = 493; break;
+case 5: genStart = 494, genEnd = 649; break;
+case 6: genStart = 650, genEnd = 721; break;
+}
 
 for (const species of dex.species.all()) {
-  if (!numToSpecies.has(species.num) && species.gen === gen) {
+  if (!numToSpecies.has(species.num) && species.num > 0 && species.gen === gen && !species.forme) {
     numToSpecies.set(species.num, species);
-    genStart = Math.min(genStart, species.num);
-    genEnd = Math.max(genEnd, species.num);
   }
 }
 
@@ -99,9 +104,74 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
       Ditto: 83, Unown: 87, Wobbuffet: 83,
     };
     level = customScale[species.name] || levelScale[species.tier] || 80;
+  } else if (gen == 3) {
+    const levelScale: { [k: string]: number } = {
+      Uber: 76,
+      OU: 80,
+      UUBL: 82,
+      UU: 84,
+      NUBL: 86,
+      NU: 88,
+      NFE: 90,
+    };
+    const customScale: { [k: string]: number } = {
+      Ditto: 99, Unown: 99,
+    };
+    level = customScale[species.name] || levelScale[tier] || (species.nfe ? 90 : 80);
+  } else if (gen == 4) {
+    // https://github.com/pkmn/ps/blob/master/randoms/src/gen4.ts#L792
+    const levelScale: { [k: string]: number } = {
+      AG: 74,
+      Uber: 76,
+      OU: 80,
+      '(OU)': 82,
+      UUBL: 82,
+      UU: 84,
+      NUBL: 86,
+      NU: 88,
+    };
+    const customScale: { [k: string]: number } = {
+      Delibird: 100, Ditto: 100, 'Farfetch\u2019d': 100, Unown: 100, Castform: 100,
+    };
+    level = customScale[species.name] || levelScale[tier] || (species.nfe ? 90 : 80);
+  } else if (gen == 5) {
+    // https://github.com/pkmn/ps/blob/master/randoms/src/gen5.ts#L724
+    const levelScale: { [tier: string]: number } = {
+      Uber: 76,
+      OU: 80,
+      '(OU)': 82,
+      UUBL: 82,
+      UU: 82,
+      RUBL: 84,
+      RU: 84,
+      NUBL: 86,
+      NU: 86,
+      '(NU)': 88,
+      PUBL: 88,
+      PU: 88,
+      '(PU)': 90,
+    };
+    const customScale: { [forme: string]: number } = {
+      Delibird: 100, 'Farfetch\u2019d': 100, Luvdisc: 100, Unown: 100,
+    };
+    level = customScale[species.name] || levelScale[species.tier] || (species.nfe ? 90 : 80);
+  } else if (gen == 6) {
+    const levelScale: { [k: string]: number } = {
+      uber: 76, ou: 80, uu: 82, ru: 84, nu: 86, pu: 88,
+    };
+    const customScale: { [k: string]: number } = {
+      // Banned Ability
+      Dugtrio: 82, Gothitelle: 82, Ninetales: 84, Politoed: 84, Wobbuffet: 82,
+      // Holistic judgement
+      Castform: 100, Delibird: 100, 'Genesect-Douse': 80, Luvdisc: 100, Spinda: 100, Unown: 100,
+    };
+    const tier = toID(species.tier).replace('bl', '');
+    level = customScale[species.name] || levelScale[tier] || (species.nfe ? 90 : 80);
   }
 
   let learnSet = dex.species.getLearnset(species.id)!;
+  if (!learnSet)
+    console.log(species);
   learnSet = Object.fromEntries(Object.entries(learnSet).filter(x => {
     if (['batonpass'].indexOf(x[0]) !== -1) {
       // pointless moves in 1v1
@@ -143,7 +213,7 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
   const abilities = new Set(Object.values(species.abilities));
   const abilityData = Array.from(abilities).map(a => dex.abilities.get(a)).filter(a => a.gen === 3);
   sortBy(abilityData, abil => -abil.rating);
-  let ability = gen <= 2 ? 'No Ability' : abilityData[0].name;
+  let ability = gen <= 2 ? 'No Ability' : abilityData[0]?.name || 'No Ability';
 
   return [{
     name: species.baseSpecies,

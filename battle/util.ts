@@ -70,3 +70,9 @@ export function sortBy<T>(array: T[], callback?: (a: T) => Comparable) {
     if (!callback) return (array as any[]).sort(compare);
     return array.sort((a, b) => compare(callback(a), callback(b)));
 }
+
+export function toID(text: any): string {
+    if (text?.id) text = text.id;
+    if (typeof text !== 'string' && typeof text !== 'number') return '';
+    return ('' + text).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
