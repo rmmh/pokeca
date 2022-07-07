@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import PIL.Image
 import PIL.ImageDraw
 import matplotlib.pyplot as plt
@@ -43,8 +45,8 @@ for line in open(opts.infile):
         data[a][a] = .5
         data[b][b] = .5
 
-    data[a][b] = (loss+tie/2)/100
-    data[b][a] = (win+tie/2)/100
+    data[a][b] = (loss+tie/2)/(win+loss+tie)
+    data[b][a] = (win+tie/2)/(win+loss+tie)
 
 def cosine_similarity(xs, ys):
     sumxx, sumxy, sumyy = 0, 0, 0

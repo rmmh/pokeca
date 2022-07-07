@@ -14,13 +14,14 @@ const sets = JSON.parse(fs.readFileSync(`gen${gen}.json`)); // from https://pkmn
 
 var numToSpecies : Map<Number, Species> = new Map();
 
-var genStart, genEnd : number;
+var genStart : number, genEnd : number;
 switch (gen) {
 case 1: genStart = 1, genEnd = 151; break;
 case 2: genStart = 152, genEnd = 251; break;
 case 3: genStart = 252, genEnd = 386; break;
 case 4: genStart = 387, genEnd = 493; break;
 case 5: genStart = 494, genEnd = 649; break;
+default:
 case 6: genStart = 650, genEnd = 721; break;
 }
 
@@ -66,7 +67,7 @@ function getSmogMoves(n: string): Set<string> | undefined {
 //
 // This is nowhere near the optimal for each species, but it approximates
 // what wild encounters look like, and is sufficient as a baseline.
-function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
+function MakeSimpleTeam(num: Number, prng?: PRNG): pkmn.PokemonSet[] {
   let species = numToSpecies.get(num)!;
 
   let level = 100;
@@ -177,6 +178,7 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
   let learnSet = dex.species.getLearnset(species.id)!;
   if (!learnSet)
     console.log(species);
+
   learnSet = Object.fromEntries(Object.entries(learnSet).filter(x => {
     if (['batonpass'].indexOf(x[0]) !== -1) {
       // pointless moves in 1v1
@@ -200,7 +202,16 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
   sortBy(movePool, move => -learnedLevel[move]);
   // console.log(movePool);
 
-  let moves = getSmogMoves(species.name);
+  let moves : Set<string> | undefined;
+  if (process.env.RANDMOVES && prng) {
+    moves = new Set();
+    prng.shuffle(movePool);
+    for (const move of movePool.slice(0, 4)) {
+      moves.add(dex.moves.get(move).name);
+    }
+  } else {
+    moves = getSmogMoves(species.name);
+  }
   if (!moves) {
     moves = new Set();
     for (const move of movePool.slice(0, 4)) {
@@ -210,10 +221,6 @@ function MakeSimpleTeam(num: Number): pkmn.PokemonSet[] {
 
   const evs = gen <= 2 ? { hp: 255, atk: 255, def: 255, spa: 255, spd: 255, spe: 255 } : { hp: 85, atk: 85, def: 85, spa: 85, spd: 85, spe: 85 };
   const ivs = gen <= 2 ? {hp: 30, atk: 30, def: 30, spa: 30, spd: 30, spe: 30} : { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 };
-  let availableHP = 0;
-  for (const setMoveid of movePool) {
-    if (setMoveid.startsWith('hiddenpower')) availableHP++;
-  }
 
   const abilities = new Set(Object.values(species.abilities));
   const abilityData = Array.from(abilities).map(a => dex.abilities.get(a)).filter(a => a.gen === 3);
@@ -240,8 +247,8 @@ async function ComputeResult(pokeA: number, pokeB: number, seed: number, debug?:
   const streams = BattleStreams.getPlayerStreams(battlestream);
   const spec = {formatid: `gen${gen}customgame`, seed: prng.startingSeed};
 
-  const p1spec = {name: `${pokeA}`, team: Teams.pack(MakeSimpleTeam(pokeA))};
-  const p2spec = {name: `${pokeB}`, team: Teams.pack(MakeSimpleTeam(pokeB))};
+  const p1spec = {name: `${pokeA}`, team: Teams.pack(MakeSimpleTeam(pokeA, prng))};
+  const p2spec = {name: `${pokeB}`, team: Teams.pack(MakeSimpleTeam(pokeB, prng))};
 
   const p1 = new RandomPlayerAI(streams.p1, {seed: prng});
   const p2 = new RandomPlayerAI(streams.p2, {seed: prng});
@@ -271,9 +278,11 @@ async function ComputeResult(pokeA: number, pokeB: number, seed: number, debug?:
   }
 }
 
+const nRounds = +process.env.ROUNDS || 100;
+
 async function ComputeWinProbability(a: number, b: number): Promise<number[]> {
   let win = 0, lose = 0, tie = 0;
-  for (let seed = 1; seed <= 100; seed++) {
+  for (let seed = 1; seed <= nRounds; seed++) {
     let res = await ComputeResult(a, b, seed);
     if (res === a) {
       win++;
@@ -297,7 +306,9 @@ async function ComputeWinProbabilities() {
   for (const promise of promises) {
     const [a, b, win, lose, tie] = await promise;
     let pa = MakeSimpleTeam(a)[0], pb = MakeSimpleTeam(b)[0];
-    console.log(pa.species, "vs", pb.species, "=", `${win}% win${tie ? ", " + tie + "% tie" : ""}`);
+    let winperc = (win / (win + lose + tie) * 100)|0;
+    let tieperc = (tie / (win + lose + tie) * 100)|0;
+    console.log(pa.species, "vs", pb.species, "=", `${winperc}% win${tie ? ", " + tieperc + "% tie" : ""}`);
     console.log(a, b, win, lose, tie);
   }
   pool.terminate();
@@ -307,7 +318,7 @@ if (workerpool.isMainThread) {
   for (let i = genStart; i <= genEnd; i++) {
     let p = MakeSimpleTeam(i)[0];
     let s = dex.species.get(p.name)
-    console.log(s.num, p.species, "lvl" + p.level, p.moves.join(','), s.tier);
+    console.log(s.num, p.species, "lvl" + p.level, process.env.RANDMOVES ? "" : p.moves.join(','), s.tier);
   }
   ComputeWinProbabilities();
 } else {
