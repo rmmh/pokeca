@@ -3,14 +3,17 @@ const workerpool = require('workerpool');
 const process = require('process');
 import * as $C from 'js-combinatorics';
 
-import { Dex, BattleStreams, RandomPlayerAI, Teams, Species, PRNG, } from '@pkmn/sim';
-import { sortBy, toID } from './util';
+import { Dex, BattleStreams, Teams, Species, PRNG, } from '@pkmn/sim';
+import { JoeyAI } from './joeyai';
+import { sortBy } from './util';
 
-import * as pkmn from '@pkmn/sets';
 import { Learnset } from '@pkmn/sim/build/sim/dex-species';
 
 const gen: number = +process.env.GEN || 1;
+const AI = JoeyAI;
+const MULTIPROC = true;
 const dex = Dex.forGen(gen);
+const roundsPerMatch = 10;
 
 var numToSpecies: Map<Number, Species> = new Map();
 
@@ -37,8 +40,8 @@ async function ComputeResult(teamA: string, teamB: string, seed: number, debug?:
     const streams = BattleStreams.getPlayerStreams(battlestream);
     const spec = { formatid: `gen${gen}customgame`, seed: prng.startingSeed };
 
-    const p1 = new RandomPlayerAI(streams.p1, { seed: prng });
-    const p2 = new RandomPlayerAI(streams.p2, { seed: prng });
+    const p1 = new AI(streams.p1, { seed: prng, dex });
+    const p2 = new AI(streams.p2, { seed: prng, dex });
 
     void p1.start();
     void p2.start();
@@ -72,7 +75,9 @@ async function ScoreTeam(testTeam: string, testInd: number, otherTeams: string[]
         if (i == testInd) {
             continue;
         }
-        score += await ComputeResult(testTeam, otherTeams[i], seedBase + i);
+        for (let j = 0; j < roundsPerMatch; j++) {
+            score += await ComputeResult(testTeam, otherTeams[i], seedBase + i + j * 100);
+        }
     }
     return score;
 }
@@ -149,7 +154,22 @@ function MakePackedTeam(num: Number, moves: string[]): string {
     }]);
 }
 
+function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function main() {
+    /*
+    for (let i = 0;; i++) {
+        await ComputeResult(
+            'Charmander|||NoAbility|flamethrower,slash,scratch|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||',
+            "Squirtle|||NoAbility|hydropump,tackle|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||",
+            i, true);
+        await sleep(1000);
+    }
+    return;
+    */
+
     const pool = workerpool.pool(__filename);
 
     const learnsets: string[][] = [];
@@ -183,7 +203,12 @@ async function main() {
 
             let proms: [string[], Promise<number>][] = [];
             let attempt = (ms: string[]) => {
-                proms.push([ms, pool.exec('ScoreTeam', [MakePackedTeam(n, ms), a, mons, loopcount * 1000])]);
+                const args: Parameters<typeof ScoreTeam> = [MakePackedTeam(n, ms), a, mons, loopcount * 1000];
+                if (MULTIPROC) {
+                    proms.push([ms, pool.exec('ScoreTeam', args)]);
+                } else {
+                    proms.push([ms, ScoreTeam(...args)]);
+                }
             }
 
             attempt(movesets[a]);
@@ -215,11 +240,13 @@ async function main() {
             }
 
             if (bestScore != initScore) {
-                let initPerc = (initScore / mons.length / 2 * 100) | 0;
-                let bestPerc = (bestScore / mons.length / 2 * 100) | 0;
+                let initPerc = (initScore / (mons.length * roundsPerMatch * 2) * 100) | 0;
+                let bestPerc = (bestScore / (mons.length * roundsPerMatch * 2) * 100) | 0;
                 console.log(n, species.name, `${initPerc}% => ${bestPerc}%`, initMoves.join(','), '=>', bestMoves.join(','));
                 movesets[a] = bestMoves;
                 mons[a] = MakePackedTeam(n, bestMoves);
+            } else {
+                console.log(n);
             }
         }
         console.log("LOOP", loopcount);

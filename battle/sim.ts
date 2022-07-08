@@ -11,6 +11,7 @@ const gen : number = +process.env.GEN || 1;
 const dex = Dex.forGen(gen);
 
 const sets = JSON.parse(fs.readFileSync(`gen${gen}.json`)); // from https://pkmn.github.io/smogon/data/sets/gen1.json
+const opts = JSON.parse(fs.readFileSync(`opt${gen}.json`));
 
 var numToSpecies : Map<Number, Species> = new Map();
 
@@ -67,7 +68,7 @@ function getSmogMoves(n: string): Set<string> | undefined {
 //
 // This is nowhere near the optimal for each species, but it approximates
 // what wild encounters look like, and is sufficient as a baseline.
-function MakeSimpleTeam(num: Number, prng?: PRNG): pkmn.PokemonSet[] {
+function MakeSimpleTeam(num: number, prng?: PRNG): pkmn.PokemonSet[] {
   let species = numToSpecies.get(num)!;
 
   let level = 100;
@@ -203,7 +204,9 @@ function MakeSimpleTeam(num: Number, prng?: PRNG): pkmn.PokemonSet[] {
   // console.log(movePool);
 
   let moves : Set<string> | undefined;
-  if (process.env.RANDMOVES && prng) {
+  if (process.env.OPT) {
+    moves = new Set(opts.movesets[num - genStart]);
+  } else if (process.env.RANDMOVES && prng) {
     moves = new Set();
     prng.shuffle(movePool);
     for (const move of movePool.slice(0, 4)) {
@@ -277,6 +280,8 @@ async function ComputeResult(pokeA: number, pokeB: number, seed: number, debug?:
     }
   }
 }
+
+ComputeResult(10, 137, 3, true);
 
 const nRounds = +process.env.ROUNDS || 100;
 
