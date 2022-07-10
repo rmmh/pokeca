@@ -13,7 +13,7 @@ import * as calc from '@smogon/calc';
 import * as dex from '@pkmn/dex';
 
 const gens = new Generations(dex.Dex);
-const moveCache: {[key: string]: MoveResult} = {};
+let moveCache: {[key: string]: MoveResult} = {};
 
 type MoveResult = ReturnType<typeof calc.calculate> & { accuracy?: number };
 
@@ -23,6 +23,8 @@ function MoveEffects(num: dex.GenerationNum, a: string, b: string, move: string)
 	if (moveCache[k]) {
 		return moveCache[k];
 	}
+
+	console.log(num, a, b, move);
 
 	let res: ReturnType<typeof MoveEffects> = calc.calculate(
 		gen,
@@ -37,11 +39,14 @@ function MoveEffects(num: dex.GenerationNum, a: string, b: string, move: string)
 	return moveCache[k] = res;
 }
 
+export function ClearMoveCache() {
+	moveCache = {};
+}
+
 export class JoeyAI extends BattleStreams.BattlePlayer {
 	protected readonly move: number;
 	protected readonly mega: number;
     protected readonly prng: PRNG;
-    protected readonly dex?: ModdedDex;
 	protected gen: dex.GenerationNum;
 	unhandledReq?: AnyObject;
 	activePokemon: {[key: string]: string};
@@ -55,7 +60,6 @@ export class JoeyAI extends BattleStreams.BattlePlayer {
 		this.move = options.move || 1.0;
 		this.mega = options.mega || 0;
 		this.prng = options.seed && !Array.isArray(options.seed) ? options.seed : new PRNG(options.seed);
-        this.dex = options.dex;
 		this.gen = 1;
 		this.activePokemon = {};
 	}
@@ -81,7 +85,7 @@ export class JoeyAI extends BattleStreams.BattlePlayer {
 		if (cmd === "gen") {
 			this.gen = +parts[1] as calc.GenerationNum;
 		} else if (cmd === "switch") {
-			this.activePokemon[parts[1].slice(0, 2)] = parts[2];
+			this.activePokemon[parts[1].slice(0, 2)] = parts[1].slice(5);
 		}
 		super.receiveLine(line);
 	}
@@ -149,7 +153,7 @@ export class JoeyAI extends BattleStreams.BattlePlayer {
 				const useMaxMoves = (!active.canDynamax && active.maxMoves) || (change && canDynamax);
 				const possibleMoves = useMaxMoves ? active.maxMoves.maxMoves : active.moves;
 
-				let me = request.side.pokemon[0].details;
+				let me = this.activePokemon[request.side.id];
 				let other = this.activePokemon[request.side.id === 'p1' ? 'p2' : 'p1'] || 'Rattata';
 
 				let canMove: {

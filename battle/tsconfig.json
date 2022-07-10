@@ -4,6 +4,7 @@
         "target": "es2022",
         "moduleResolution": "node",
         "inlineSourceMap": true,
+        "module": "nodenext",
     },
     "files": [
         "sim.ts",

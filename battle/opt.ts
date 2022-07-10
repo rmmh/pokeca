@@ -1,19 +1,21 @@
 const fs = require('fs');
 const workerpool = require('workerpool');
 const process = require('process');
+import Database from 'better-sqlite3';
 import * as $C from 'js-combinatorics';
 
-import { Dex, BattleStreams, Teams, Species, PRNG, } from '@pkmn/sim';
-import { JoeyAI } from './joeyai';
+import { Dex, BattleStreams, Teams, Species, PRNG, RandomPlayerAI, Battle, } from '@pkmn/sim';
 import { sortBy } from './util';
 
 import { Learnset } from '@pkmn/sim/build/sim/dex-species';
+import { match } from 'assert';
+import { exit } from 'process';
 
 const gen: number = +process.env.GEN || 1;
-const AI = JoeyAI;
+const AI =  RandomPlayerAI;
 const MULTIPROC = true;
 const dex = Dex.forGen(gen);
-const roundsPerMatch = 10;
+let roundsPerMatch = +process.env.ROUNDS || 1;
 
 var numToSpecies: Map<Number, Species> = new Map();
 
@@ -40,8 +42,8 @@ async function ComputeResult(teamA: string, teamB: string, seed: number, debug?:
     const streams = BattleStreams.getPlayerStreams(battlestream);
     const spec = { formatid: `gen${gen}customgame`, seed: prng.startingSeed };
 
-    const p1 = new AI(streams.p1, { seed: prng, dex });
-    const p2 = new AI(streams.p2, { seed: prng, dex });
+    const p1 = new AI(streams.p1, { seed: prng });
+    const p2 = new AI(streams.p2, { seed: prng });
 
     void p1.start();
     void p2.start();
@@ -67,6 +69,168 @@ async function ComputeResult(teamA: string, teamB: string, seed: number, debug?:
         }
     }
     return 1.0;
+}
+
+class Result {
+    id: number
+    win: number
+    tie: number
+    lose: number
+
+    constructor(id: number, win: number, tie: number, lose: number) {
+        this.id = id;
+        this.win = win;
+        this.tie = tie;
+        this.lose = lose;
+    }
+}
+
+var cachedTids: {[key: string]: number};
+var cachedResults: {[key: string]: Result};
+
+const db = new Database('battle.db');
+function getDB() {
+    db.exec("PRAGMA journal_mode=WAL;");
+    db.exec("PRAGMA synchronous=NORMAL");
+
+    db.exec("CREATE TABLE if not exists team(id integer primary key autoincrement, packed unique, species, level)");
+    db.exec("CREATE TABLE if not exists results(id integer primary key autoincrement, gen, teama, teamb, win, lose, tie, unique(gen, teama, teamb))");
+
+    if (!cachedTids) {
+        cachedTids = Object.fromEntries(db.prepare("select packed, id from team").raw().iterate());
+        console.log("loaded tid cache");
+    }
+
+    if (!cachedResults) {
+        cachedResults = {};
+        let res = db.prepare("select id, teama, teamb, win, tie, lose from results where gen=?").raw().iterate(gen);
+        for (const row of res) {
+            let k = MatchupKey(row[1], row[2]);
+            cachedResults[k] = cachedResults[row[0]] = new Result(row[0], row[3], row[4], row[5]);
+        };
+        console.log("loaded result cache");
+    }
+
+    return db;
+}
+
+type BattleSpec = {
+    teams: string[],
+    matches: [ta: number, tb: number, seed: number, resid: number][],
+};
+
+type BattleRes = [resid: number, score: number][];
+
+function MatchupKey(teamA: number, teamB: number) {
+    return `${teamA},${teamB}`;
+}
+
+function GetResult(teamA: string|number, teamB: string|number) {
+    if (typeof teamA === "string") {
+        teamA = cachedTids[teamA];
+    }
+    if (typeof teamB === "string") {
+        teamB = cachedTids[teamB];
+    }
+    return cachedResults[MatchupKey(teamA, teamB)];
+}
+
+async function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string[], wantRounds: number) {
+    const db = getDB();
+
+    async function getTeamId(team: string, ind: number) {
+        const s = numToSpecies.get(genStart + ind)!;
+        //let tid = await db.get("select id from team where packed=?", team);
+        let tid = cachedTids[team];
+        if (!tid) {
+            const res = db.prepare('insert into team(packed, species, level) values (?,?,?)').run(team, s.name, 100);
+            tid = res.lastInsertRowid as number;
+            cachedTids[team] = tid;
+        }
+        return tid;
+    }
+
+    const testTeamId = await getTeamId(testTeam, testInd);
+
+    const spec: BattleSpec = {
+        teams: [testTeam],
+        matches: [],
+    }
+
+    for (let i = 0; i < otherTeams.length; i++) {
+        if (i == testInd) {
+            continue;
+        }
+        const otherTeamId = await getTeamId(otherTeams[i], i);
+
+        let neededBattles = wantRounds;
+        let seed = 0;
+        let matchupId = 0;
+        let cres = GetResult(testTeamId, otherTeamId);
+        if (cres) {
+            const tot = cres.lose+cres.tie+cres.win;
+            matchupId = cres.id;
+            neededBattles -= tot;
+            seed = tot;
+        } else {
+            const res = await db.prepare('insert into results(gen, teama, teamb, win, lose, tie) values(?, ?, ?, 0, 0, 0)').run(gen, testTeamId, otherTeamId);
+            matchupId = res.lastInsertRowid as number;
+            cachedResults[matchupId] = cachedResults[MatchupKey(testTeamId, otherTeamId)] = new Result(matchupId, 0, 0, 0);
+        }
+        if (neededBattles <= 0) {
+            continue;
+        }
+
+        const j = spec.teams.length;
+        spec.teams.push(otherTeams[i]);
+        for (let i = 0; i < neededBattles; i++, seed++) {
+            spec.matches.push([0, j, seed, matchupId]);
+        }
+    }
+    if (spec.matches.length === 0) {
+        spec.teams = [];
+    }
+    return spec;
+}
+
+async function RunBattles(spec: BattleSpec) {
+    const res: BattleRes = [];
+    for (const match of spec.matches) {
+        res.push([match[3], await ComputeResult(spec.teams[match[0]], spec.teams[match[1]], match[2])]);
+    }
+    return res;
+}
+
+async function CommitBattles(results: BattleRes) {
+    if (!results.length) { return; }
+    const db = getDB();
+    let stmt = db.prepare('update results set win=win+?, tie=tie+?, lose=lose+? where id=?');
+    db.transaction(() => {
+        for (const result of results) {
+            const s = result[1];
+            const w = +(s==2), t=+(s==1), l=+(s==0);
+            stmt.run(w|0, t|0, l|0, result[0]);
+            const res = cachedResults[result[0]];
+            res.win += w;
+            res.tie += t;
+            res.lose += l;
+        }
+    })();
+}
+
+async function RetrieveScores(movesets: string[][], ind: number, mons: string[]) {    const res: number[] = [];
+    for (const ms of movesets) {
+        const team = MakePackedTeam(ind + genStart, ms);
+        let score = 0;
+        for (let i = 0; i < mons.length; i++) {
+            if (i == ind) continue;
+            let row = GetResult(team, mons[i]);
+            if (!row) continue;
+            score += (2 * row.win + row.tie) / (row.win + row.tie + row.lose);
+        }
+        res.push(score);
+    }
+    return res;
 }
 
 async function ScoreTeam(testTeam: string, testInd: number, otherTeams: string[], seedBase: number) {
@@ -159,17 +323,6 @@ function sleep(ms: number) {
 }
 
 async function main() {
-    /*
-    for (let i = 0;; i++) {
-        await ComputeResult(
-            'Charmander|||NoAbility|flamethrower,slash,scratch|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||',
-            "Squirtle|||NoAbility|hydropump,tackle|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||",
-            i, true);
-        await sleep(1000);
-    }
-    return;
-    */
-
     const pool = workerpool.pool(__filename);
 
     const learnsets: string[][] = [];
@@ -183,6 +336,30 @@ async function main() {
         learnsets.push(ls);
         movesets.push(ls.slice(0, 4));
         mons.push(MakePackedTeam(n, ls.slice(0, 4)));
+    }
+
+    if (0) {
+        for (let i = 0; ; i++) {
+            let battles = await ComputeBattleSpec(
+                mons[0], 0,
+                mons.slice(0, 20),
+                //'Charmander|||NoAbility|flamethrower,slash,scratch|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||',
+                //"Squirtle|||NoAbility|hydropump,tackle|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||",
+                roundsPerMatch,
+                );
+            let res = await RunBattles(battles);
+            await CommitBattles(res);
+            console.log(res);
+            await sleep(1000);
+            continue;
+            await ComputeResult(
+                mons[0], mons[1],
+                //'Charmander|||NoAbility|flamethrower,slash,scratch|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||',
+                //"Squirtle|||NoAbility|hydropump,tackle|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||",
+                i, true);
+            await sleep(1000);
+        }
+        return;
     }
 
     let fname = `opt${gen}.json`;
@@ -201,56 +378,94 @@ async function main() {
             const species = numToSpecies.get(n)!;
             const learnset = learnsets[a];
 
-            let proms: [string[], Promise<number>][] = [];
-            let attempt = (ms: string[]) => {
-                const args: Parameters<typeof ScoreTeam> = [MakePackedTeam(n, ms), a, mons, loopcount * 1000];
+            let msa: string[][] = [];
+            let proms: Promise<BattleRes>[] = [];
+            let attempt = async (ms: string[], rounds?: number) => {
+                const battles = await ComputeBattleSpec(MakePackedTeam(n, ms), a, mons, rounds || roundsPerMatch);
+                msa.push(ms);
+
+                if (battles.matches.length == 0) return;
+
                 if (MULTIPROC) {
-                    proms.push([ms, pool.exec('ScoreTeam', args)]);
+                    proms.push(pool.exec('RunBattles', [battles]));
                 } else {
-                    proms.push([ms, ScoreTeam(...args)]);
+                    proms.push(RunBattles(battles));
                 }
             }
 
-            attempt(movesets[a]);
-
             for (const c of new $C.Combination(learnset, 1)) {
-                attempt(c);
+                await attempt(c);
             }
             for (const c of new $C.Combination(learnset, 2)) {
-                attempt(c);
+                await attempt(c);
             }
             for (const c of new $C.Combination(learnset, 3)) {
-                attempt(c);
+                await attempt(c);
             }
             for (const c of new $C.Combination(learnset, 4)) {
-                attempt(c);
+                await attempt(c);
             }
 
-            let initScore = await proms[0][1];
-            let initMoves = proms[0][0];
+            let probeCount = 0;
+            for (const prom of proms) {
+                const res = await prom;
+                probeCount += res.length;
+                await CommitBattles(res);
+            }
+
+            let comboCount = msa.length;
+
+            let scores = await RetrieveScores(msa, a, mons);
+
+            let initScore = (await RetrieveScores([movesets[a]], a, mons))[0];
+            let initMoves = movesets[a];
+
+            let scoreMove: [number, string[]][] = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
+
+            // console.log("scoremove init:", scoreMove.slice(0, 10));
+
+            proms = [];
+            for (let i = 0; i < scoreMove.length && i < 20 && scoreMove[i][0] >= initScore * .9; i++) {
+                await attempt(scoreMove[i][1], 20);
+                msa.pop();
+            }
+
+            for (const prom of proms) {
+                const res = await prom;
+                probeCount += res.length;
+                await CommitBattles(res);
+            }
+
+            scores = await RetrieveScores(msa, a, mons);
+            scoreMove = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
+            // console.log("scoreMove after:", scoreMove.slice(0, proms.length + 2));
+
+
             let bestScore = initScore;
             let bestMoves = initMoves;
 
-            for (let i = 1; i < proms.length; i++) {
-                let newScore = await proms[i][1];
+            for (let i = 1; i < scores.length; i++) {
+                let newScore = scores[i];
                 if (newScore > bestScore) {
                     bestScore = newScore;
-                    bestMoves = proms[i][0];
+                    bestMoves = msa[i];
                 }
             }
 
-            if (bestScore != initScore) {
-                let initPerc = (initScore / (mons.length * roundsPerMatch * 2) * 100) | 0;
+            const initPerc = (initScore / (mons.length * roundsPerMatch * 2) * 100) | 0;
+            if (JSON.stringify(bestMoves) !== JSON.stringify(initMoves)) {
                 let bestPerc = (bestScore / (mons.length * roundsPerMatch * 2) * 100) | 0;
-                console.log(n, species.name, `${initPerc}% => ${bestPerc}%`, initMoves.join(','), '=>', bestMoves.join(','));
+                console.log(n, `${probeCount}B/${comboCount}C`, proms.length, species.name, `${initPerc}% => ${bestPerc}%`, initMoves.join(','), '=>', bestMoves.join(','));
                 movesets[a] = bestMoves;
                 mons[a] = MakePackedTeam(n, bestMoves);
             } else {
-                console.log(n);
+                console.log(n, `${probeCount}B/${comboCount}C`, proms.length, species.name, `${initPerc}%`, initMoves.join(','));
             }
         }
         console.log("LOOP", loopcount);
-        fs.writeFileSync(fname, JSON.stringify({mons, movesets}));
+        fs.writeFileSync(`opt${gen}.json`, JSON.stringify({mons, movesets}));
+        roundsPerMatch++;
+        break;
     }
 
     pool.terminate();
@@ -262,5 +477,6 @@ if (workerpool.isMainThread) {
     workerpool.worker({
         ComputeResult,
         ScoreTeam,
+        RunBattles,
     })
 }
