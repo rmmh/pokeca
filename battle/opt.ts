@@ -1,15 +1,13 @@
 const fs = require('fs');
 const workerpool = require('workerpool');
 const process = require('process');
-import Database from 'better-sqlite3';
+import Database from 'better-sqlite3-int';
 import * as $C from 'js-combinatorics';
 
 import { Dex, BattleStreams, Teams, Species, PRNG, RandomPlayerAI, Battle, } from '@pkmn/sim';
 import { sortBy } from './util';
 
 import { Learnset } from '@pkmn/sim/build/sim/dex-species';
-import { match } from 'assert';
-import { exit } from 'process';
 
 const gen: number = +process.env.GEN || 1;
 const AI =  RandomPlayerAI;
@@ -83,15 +81,20 @@ class Result {
         this.tie = tie;
         this.lose = lose;
     }
+
+    get avg() {
+        return (2 * this.win + this.tie) / (this.win + this.tie + this.lose);
+    }
 }
 
 var cachedTids: {[key: string]: number};
-var cachedResults: {[key: string]: Result};
+var cachedResults: Map<string|number, Result> = new Map();
 
 const db = new Database('battle.db');
 function getDB() {
     db.exec("PRAGMA journal_mode=WAL;");
     db.exec("PRAGMA synchronous=NORMAL");
+    db.exec("PRAGMA cache_size=-100000");
 
     db.exec("CREATE TABLE if not exists team(id integer primary key autoincrement, packed unique, species, level)");
     db.exec("CREATE TABLE if not exists results(id integer primary key autoincrement, gen, teama, teamb, win, lose, tie, unique(gen, teama, teamb))");
@@ -99,16 +102,6 @@ function getDB() {
     if (!cachedTids) {
         cachedTids = Object.fromEntries(db.prepare("select packed, id from team").raw().iterate());
         console.log("loaded tid cache");
-    }
-
-    if (!cachedResults) {
-        cachedResults = {};
-        let res = db.prepare("select id, teama, teamb, win, tie, lose from results where gen=?").raw().iterate(gen);
-        for (const row of res) {
-            let k = MatchupKey(row[1], row[2]);
-            cachedResults[k] = cachedResults[row[0]] = new Result(row[0], row[3], row[4], row[5]);
-        };
-        console.log("loaded result cache");
     }
 
     return db;
@@ -125,6 +118,8 @@ function MatchupKey(teamA: number, teamB: number) {
     return `${teamA},${teamB}`;
 }
 
+const _getResultQuery = db.prepare("select id, win, tie, lose from results where gen=? and teama=? and teamb=?").raw();
+
 function GetResult(teamA: string|number, teamB: string|number) {
     if (typeof teamA === "string") {
         teamA = cachedTids[teamA];
@@ -132,13 +127,24 @@ function GetResult(teamA: string|number, teamB: string|number) {
     if (typeof teamB === "string") {
         teamB = cachedTids[teamB];
     }
-    return cachedResults[MatchupKey(teamA, teamB)];
+    const k = MatchupKey(teamA, teamB);
+    const v = cachedResults.get(k);
+    if (v !== undefined) {
+        return v;
+    }
+    const row = _getResultQuery.get(gen, teamA, teamB);
+    if (!row) {
+        return;
+    }
+    const res = new Result(row[0], row[1], row[2], row[3]);
+    cachedResults.set(k, res).set(row[0], res);
+    return res;
 }
 
-async function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string[], wantRounds: number) {
+function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string[], wantRounds: number) {
     const db = getDB();
 
-    async function getTeamId(team: string, ind: number) {
+    function getTeamId(team: string, ind: number) {
         const s = numToSpecies.get(genStart + ind)!;
         //let tid = await db.get("select id from team where packed=?", team);
         let tid = cachedTids[team];
@@ -150,7 +156,7 @@ async function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: 
         return tid;
     }
 
-    const testTeamId = await getTeamId(testTeam, testInd);
+    const testTeamId = getTeamId(testTeam, testInd);
 
     const spec: BattleSpec = {
         teams: [testTeam],
@@ -161,7 +167,7 @@ async function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: 
         if (i == testInd) {
             continue;
         }
-        const otherTeamId = await getTeamId(otherTeams[i], i);
+        const otherTeamId = getTeamId(otherTeams[i], i);
 
         let neededBattles = wantRounds;
         let seed = 0;
@@ -173,9 +179,10 @@ async function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: 
             neededBattles -= tot;
             seed = tot;
         } else {
-            const res = await db.prepare('insert into results(gen, teama, teamb, win, lose, tie) values(?, ?, ?, 0, 0, 0)').run(gen, testTeamId, otherTeamId);
-            matchupId = res.lastInsertRowid as number;
-            cachedResults[matchupId] = cachedResults[MatchupKey(testTeamId, otherTeamId)] = new Result(matchupId, 0, 0, 0);
+            const row = db.prepare('insert into results(gen, teama, teamb, win, lose, tie) values(?, ?, ?, 0, 0, 0)').run(gen, testTeamId, otherTeamId);
+            matchupId = row.lastInsertRowid as number;
+            const res = new Result(matchupId, 0, 0, 0);
+            cachedResults.set(matchupId, res).set(MatchupKey(testTeamId, otherTeamId), res);
         }
         if (neededBattles <= 0) {
             continue;
@@ -201,7 +208,7 @@ async function RunBattles(spec: BattleSpec) {
     return res;
 }
 
-async function CommitBattles(results: BattleRes) {
+function CommitBattles(results: BattleRes) {
     if (!results.length) { return; }
     const db = getDB();
     let stmt = db.prepare('update results set win=win+?, tie=tie+?, lose=lose+? where id=?');
@@ -209,8 +216,8 @@ async function CommitBattles(results: BattleRes) {
         for (const result of results) {
             const s = result[1];
             const w = +(s==2), t=+(s==1), l=+(s==0);
-            stmt.run(w|0, t|0, l|0, result[0]);
-            const res = cachedResults[result[0]];
+            stmt.run(w, t, l, result[0]);
+            const res = cachedResults.get(result[0])!;
             res.win += w;
             res.tie += t;
             res.lose += l;
@@ -218,7 +225,7 @@ async function CommitBattles(results: BattleRes) {
     })();
 }
 
-async function RetrieveScores(movesets: string[][], ind: number, mons: string[]) {    const res: number[] = [];
+function RetrieveScores(movesets: string[][], ind: number, mons: string[]) {    const res: number[] = [];
     for (const ms of movesets) {
         const team = MakePackedTeam(ind + genStart, ms);
         let score = 0;
@@ -232,6 +239,25 @@ async function RetrieveScores(movesets: string[][], ind: number, mons: string[])
     }
     return res;
 }
+
+function ComputeCover(movesets: string[][], ind: number, mons: string[], groupCount: number, groupSize: number) {
+    let rows = movesets.slice();
+    let cols = mons.slice(0, ind).concat(mons.slice(ind+1));
+    console.assert(cols.length === mons.length-1);
+
+    let groupAlternates = {};
+    let ret = [];
+    for (let i = 0; i < groupCount; i++) {
+        let vals: number[][] = [];
+        for (const row of rows) {
+            const rowTeam = MakePackedTeam(ind + genStart, row);
+            vals.push(cols.map(c => GetResult(rowTeam, c)!.avg));
+        }
+        rows.map((ms, i) => [vals[i].reduce((x,y)=>x+y), i]);
+        //console.log(vals);
+    }
+}
+
 
 async function ScoreTeam(testTeam: string, testInd: number, otherTeams: string[], seedBase: number) {
     let score = 0;
@@ -328,19 +354,21 @@ async function main() {
     const learnsets: string[][] = [];
     let movesets: string[][] = [];
     let mons: string[] = [];
+    let alternates: [number[], string[]][][] = [];
 
     for (let n = genStart; n <= genEnd; n++) {
         let s = numToSpecies.get(n)!;
         let ls = getLevelLearnset(n);
-        console.log(n, s.name, ls.length, ls.join(","));
+        process.env.SKIPMOVES || console.log(n, s.name, ls.length, ls.join(","));
         learnsets.push(ls);
         movesets.push(ls.slice(0, 4));
         mons.push(MakePackedTeam(n, ls.slice(0, 4)));
+        alternates.push([]);
     }
 
     if (0) {
         for (let i = 0; ; i++) {
-            let battles = await ComputeBattleSpec(
+            let battles = ComputeBattleSpec(
                 mons[0], 0,
                 mons.slice(0, 20),
                 //'Charmander|||NoAbility|flamethrower,slash,scratch|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||',
@@ -348,7 +376,7 @@ async function main() {
                 roundsPerMatch,
                 );
             let res = await RunBattles(battles);
-            await CommitBattles(res);
+            CommitBattles(res);
             console.log(res);
             await sleep(1000);
             continue;
@@ -369,19 +397,23 @@ async function main() {
             prevState = JSON.parse(prevState);
             mons = prevState.mons;
             movesets = prevState.movesets;
+            alternates = prevState.alternates;
         }
     } catch {}
 
     for (let loopcount = 0;; loopcount++) {
         for (let a = 0; a < mons.length; a++) {
+            cachedResults.clear(); // large map operations are very slow
             const n = a + genStart;
             const species = numToSpecies.get(n)!;
             const learnset = learnsets[a];
 
+            let probeCount = 0;
+
             let msa: string[][] = [];
             let proms: Promise<BattleRes>[] = [];
-            let attempt = async (ms: string[], rounds?: number) => {
-                const battles = await ComputeBattleSpec(MakePackedTeam(n, ms), a, mons, rounds || roundsPerMatch);
+            let attempt = (ms: string[], rounds?: number) => {
+                const battles = ComputeBattleSpec(MakePackedTeam(n, ms), a, mons, rounds || roundsPerMatch);
                 msa.push(ms);
 
                 if (battles.matches.length == 0) return;
@@ -394,67 +426,71 @@ async function main() {
             }
 
             for (const c of new $C.Combination(learnset, 1)) {
-                await attempt(c);
+                attempt(c);
             }
+            proms && await sleep(0);
             for (const c of new $C.Combination(learnset, 2)) {
-                await attempt(c);
+                attempt(c);
             }
+            proms && await sleep(0);
             for (const c of new $C.Combination(learnset, 3)) {
-                await attempt(c);
+                attempt(c);
             }
+            proms && await sleep(0);
             for (const c of new $C.Combination(learnset, 4)) {
-                await attempt(c);
+                attempt(c);
             }
 
-            let probeCount = 0;
             for (const prom of proms) {
                 const res = await prom;
                 probeCount += res.length;
-                await CommitBattles(res);
+                CommitBattles(res);
             }
 
             let comboCount = msa.length;
 
-            let scores = await RetrieveScores(msa, a, mons);
-
-            let initScore = (await RetrieveScores([movesets[a]], a, mons))[0];
+            let initScore = (RetrieveScores([movesets[a]], a, mons))[0];
             let initMoves = movesets[a];
 
+            let scores = RetrieveScores(msa, a, mons);
             let scoreMove: [number, string[]][] = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
 
             // console.log("scoremove init:", scoreMove.slice(0, 10));
 
+            let cover = ComputeCover(msa, a, mons, 4, 10);
+            /*
+            for (const group of cover) {
+                for (const [ms, _opponents] of group) {
+                    attempt(ms, 20);
+                    msa.pop();
+                }
+            }
+            */
+
             proms = [];
             for (let i = 0; i < scoreMove.length && i < 20 && scoreMove[i][0] >= initScore * .9; i++) {
-                await attempt(scoreMove[i][1], 20);
+                attempt(scoreMove[i][1], 20);
                 msa.pop();
             }
 
             for (const prom of proms) {
                 const res = await prom;
                 probeCount += res.length;
-                await CommitBattles(res);
+                CommitBattles(res);
             }
 
-            scores = await RetrieveScores(msa, a, mons);
+            scores = RetrieveScores(msa, a, mons);
             scoreMove = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
             // console.log("scoreMove after:", scoreMove.slice(0, proms.length + 2));
 
+            // initScore can change with the extra sampling
+            initScore = (RetrieveScores([movesets[a]], a, mons))[0];
+            let bestScore = scoreMove[0][0];
+            let bestMoves = scoreMove[0][1];
 
-            let bestScore = initScore;
-            let bestMoves = initMoves;
-
-            for (let i = 1; i < scores.length; i++) {
-                let newScore = scores[i];
-                if (newScore > bestScore) {
-                    bestScore = newScore;
-                    bestMoves = msa[i];
-                }
-            }
-
-            const initPerc = (initScore / (mons.length * roundsPerMatch * 2) * 100) | 0;
+            const initPerc = (initScore / (mons.length * 2) * 100) | 0;
             if (JSON.stringify(bestMoves) !== JSON.stringify(initMoves)) {
-                let bestPerc = (bestScore / (mons.length * roundsPerMatch * 2) * 100) | 0;
+                let bestPerc = (bestScore / (mons.length * 2) * 100) | 0;
                 console.log(n, `${probeCount}B/${comboCount}C`, proms.length, species.name, `${initPerc}% => ${bestPerc}%`, initMoves.join(','), '=>', bestMoves.join(','));
                 movesets[a] = bestMoves;
                 mons[a] = MakePackedTeam(n, bestMoves);
