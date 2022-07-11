@@ -2,6 +2,7 @@
 
 import PIL.Image
 import PIL.ImageDraw
+import PIL.ImageFont
 import matplotlib.pyplot as plt
 import matplotlib.colors
 import argparse
@@ -19,34 +20,63 @@ spritesize = 24
 entries = {}
 genStart = 999
 genEnd = 0
-data = None
 
-for line in open(opts.infile):
-    line = line.strip()
-    if 'lvl' in line:
-        parts = line.split()
-        num = int(parts[0])
-        entries[num] = parts[1:]
-        genStart = min(genStart, num)
-        genEnd = max(genEnd, num)
-    if 'vs' in line or 'lvl' in line:
-        continue
-    if not data:
-        data = [[None] * (genEnd - genStart + 1) for _ in range(genStart, genEnd + 1)]
-    a, b, win, loss, tie = [int(x) for x in line.split()]
+def loadResultsText(fname):
+    global genStart, genEnd
+    data = None
+    for line in open(fname):
+        line = line.strip()
+        if 'lvl' in line:
+            parts = line.split()
+            num = int(parts[0])
+            entries[num] = {'line': parts[1:]}
+            genStart = min(genStart, num)
+            genEnd = max(genEnd, num)
+        if 'vs' in line or 'lvl' in line:
+            continue
+        if not data:
+            data = [[None] * (genEnd - genStart + 1) for _ in range(genStart, genEnd + 1)]
+        a, b, win, loss, tie = [int(x) for x in line.split()]
 
-    mx = 16
-    my = 6
+        a -= genStart
+        b -= genStart
 
-    a -= genStart
-    b -= genStart
+        for s in (a, b):
+            data[a][a] = .5
+            data[b][b] = .5
 
-    for s in (a, b):
+        data[a][b] = (loss+tie/2)/(win+loss+tie)
+        data[b][a] = (win+tie/2)/(win+loss+tie)
+
+    return data
+
+def loadResultsDB(fname):
+    global genStart, genEnd
+    import sqlite3
+    import json
+
+    gen = int(fname[-6])
+    matchups = json.load(open(fname))
+    db = sqlite3.connect('battle.db')
+    count = len(matchups['mons'])
+    data = [[None] * (count) for _ in range(count)]
+    tids = {packed: db.execute('select id from team where packed=?', (packed,)).fetchone()[0] for packed in matchups['mons']}
+    genStart = 1
+    genEnd = count
+    for a, ta in enumerate(matchups['mons']):
         data[a][a] = .5
-        data[b][b] = .5
+        entries[a] = {'moves': [x.title() for x in matchups['movesets'][a][::-1]]}
+        for b, tb in enumerate(matchups['mons'][a+1:], a+1):
+            win, loss, tie = db.execute('select win, lose, tie from results where gen=? '
+                ' and teama=? and teamb=?', (gen, tids[ta], tids[tb])).fetchone()
+            data[a][b] = (loss+tie/2)/(win+loss+tie)
+            data[b][a] = (win+tie/2)/(win+loss+tie)
+    return data
 
-    data[a][b] = (loss+tie/2)/(win+loss+tie)
-    data[b][a] = (win+tie/2)/(win+loss+tie)
+if opts.infile.endswith('.json'):
+    data = loadResultsDB(opts.infile)
+else:
+    data = loadResultsText(opts.infile)
 
 def cosine_similarity(xs, ys):
     sumxx, sumxy, sumyy = 0, 0, 0
@@ -125,7 +155,7 @@ elif opts.order == 'tsp':
 
 if opts.tiers:
     ts = [x.lower() for x in opts.tiers]
-    order = [x for x in order if entries[x+genStart][-1].lower() in ts]
+    order = [x for x in order if entries[x+genStart]['line'][-1].lower() in ts]
 
 def remap(x):
     try:
@@ -136,14 +166,27 @@ def remap(x):
 count = len(order)
 basedim = (count + 1) * spritesize
 
-im = PIL.Image.new(mode="RGBA", size=(basedim + 16, basedim + 8), color=(128, 128, 128))
+mx = 16
+my = 6
+movewidth = 0
+font = PIL.ImageFont.load("font.pil")  # gen3
+
+for ent in entries.values():
+    if 'moves' not in ent:
+        continue
+    ms = ent['moves']
+    movewidth = max(movewidth, font.getsize(' '.join(ms[:2]))[0])
+    movewidth = max(movewidth, font.getsize(' '.join(ms[2:4]))[0])
+
+mx += movewidth
+
+im = PIL.Image.new(mode="RGBA", size=(movewidth + basedim + 16, basedim + 8), color=(128, 128, 128))
 
 # extracted from pokesprite's git repo under the icons/pokemon/regular dir using this cmd:
 # MAGICK_OCL_DEVICE=OFF montage -background none \
 # $(jq -r '.[].slug.eng + ".png" ' < ../../../data/pkmn.json  | head -n 721) \
 # -geometry +0+0  -tile 16x gen1.png && gliv boxicons.png
 sp = PIL.Image.open("boxicons.png")
-
 if opts.color == 'redgrayblue':
     cm = matplotlib.colors.LinearSegmentedColormap.from_list('redgrayblue',
         [(1, 0, 0), (.5, .5, .5), (0, 0, 1)])
@@ -158,11 +201,25 @@ for n, mon in enumerate(order, 1):
     spy = ((mon - 1) // 16) * 30
     spx = ((mon - 1) % 16) * 40
     monsp = sp.crop((spx, spy, spx + 40, spy + 30))
-    im.alpha_composite(monsp, (0, n * spritesize))
-    im.alpha_composite(monsp, (8 + n * spritesize, 0))
+    im.alpha_composite(monsp, (movewidth, n * spritesize))
+    im.alpha_composite(monsp, (movewidth + 8 + n * spritesize, 0))
 
 for mon, vals in enumerate(data):
     a = remap(mon)
+
+    try:
+        ms = entries[mon]['moves']
+    except KeyError:
+        pass
+    else:
+        l1, l2 = ' '.join(ms[:2]), ' '.join(ms[2:4])
+        l1w = font.getsize(l1)[0]
+        l2w = font.getsize(l2)[0]
+        if l2:
+            dr.text((movewidth - l1w, -4 + my + a * spritesize), l1, font=font)
+            dr.text((movewidth - l2w, 7 + my + a * spritesize), l2, font=font)
+        else:
+            dr.text((movewidth - l1w, 3 + my + a * spritesize), l1, font=font)
 
     for b, v in enumerate(vals):
         b = remap(b)

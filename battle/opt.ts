@@ -141,7 +141,7 @@ function GetResult(teamA: string|number, teamB: string|number) {
     return res;
 }
 
-function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string[], wantRounds: number) {
+function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string[], wantRounds: number, half?: boolean) {
     const db = getDB();
 
     function getTeamId(team: string, ind: number) {
@@ -165,6 +165,9 @@ function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string
 
     for (let i = 0; i < otherTeams.length; i++) {
         if (i == testInd) {
+            continue;
+        }
+        if (half && i < testInd) {
             continue;
         }
         const otherTeamId = getTeamId(otherTeams[i], i);
@@ -412,8 +415,8 @@ async function main() {
 
             let msa: string[][] = [];
             let proms: Promise<BattleRes>[] = [];
-            let attempt = (ms: string[], rounds?: number) => {
-                const battles = ComputeBattleSpec(MakePackedTeam(n, ms), a, mons, rounds || roundsPerMatch);
+            let attempt = (ms: string[], rounds?: number, half?: boolean) => {
+                const battles = ComputeBattleSpec(MakePackedTeam(n, ms), a, mons, rounds || roundsPerMatch, half || false);
                 msa.push(ms);
 
                 if (battles.matches.length == 0) return;
@@ -425,27 +428,28 @@ async function main() {
                 }
             }
 
+            let commit = async () => {
+                for (const prom of proms) {
+                    const res = await prom;
+                    probeCount += res.length;
+                    CommitBattles(res);
+                }
+            }
+
             for (const c of new $C.Combination(learnset, 1)) {
                 attempt(c);
             }
-            proms && await sleep(0);
             for (const c of new $C.Combination(learnset, 2)) {
                 attempt(c);
             }
-            proms && await sleep(0);
             for (const c of new $C.Combination(learnset, 3)) {
                 attempt(c);
             }
-            proms && await sleep(0);
             for (const c of new $C.Combination(learnset, 4)) {
                 attempt(c);
             }
 
-            for (const prom of proms) {
-                const res = await prom;
-                probeCount += res.length;
-                CommitBattles(res);
-            }
+            await commit();
 
             let comboCount = msa.length;
 
@@ -457,8 +461,8 @@ async function main() {
 
             // console.log("scoremove init:", scoreMove.slice(0, 10));
 
-            let cover = ComputeCover(msa, a, mons, 4, 10);
             /*
+            let cover = ComputeCover(msa, a, mons, 4, 10);
             for (const group of cover) {
                 for (const [ms, _opponents] of group) {
                     attempt(ms, 20);
@@ -473,11 +477,7 @@ async function main() {
                 msa.pop();
             }
 
-            for (const prom of proms) {
-                const res = await prom;
-                probeCount += res.length;
-                CommitBattles(res);
-            }
+            await commit();
 
             scores = RetrieveScores(msa, a, mons);
             scoreMove = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
@@ -487,6 +487,11 @@ async function main() {
             initScore = (RetrieveScores([movesets[a]], a, mons))[0];
             let bestScore = scoreMove[0][0];
             let bestMoves = scoreMove[0][1];
+
+            if (process.env.FINAL) {
+                attempt(bestMoves, 50, true);
+                await commit();
+            }
 
             const initPerc = (initScore / (mons.length * 2) * 100) | 0;
             if (JSON.stringify(bestMoves) !== JSON.stringify(initMoves)) {
