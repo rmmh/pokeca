@@ -61,8 +61,8 @@ def loadResultsDB(fname):
     count = len(matchups['mons'])
     data = [[None] * (count) for _ in range(count)]
     tids = {packed: db.execute('select id from team where packed=?', (packed,)).fetchone()[0] for packed in matchups['mons']}
-    genStart = 1
-    genEnd = count
+    genStart = [1, 152, 252, 387, 494, 650][gen - 1]
+    genEnd = genStart + count - 1
     for a, ta in enumerate(matchups['mons']):
         data[a][a] = .5
         entries[a] = {'moves': [x.title() for x in matchups['movesets'][a][::-1]]}
