@@ -249,7 +249,13 @@ function ComputeCover(movesets: string[][], ind: number, mons: string[], groupCo
 
     const sum = (x: number[]) => x.reduce((x, y) => x + y);
 
+    let vals: number[][] = [];
+    let valSums: number[] = [];
+
     function maxSumRows(inds: number[]) {
+        if (inds.length === 1) {
+            return valSums[inds[0]];
+        }
         let out = 0;
         for (let i = 0; i < vals[0].length; i++) {
             let m = 0;
@@ -260,9 +266,6 @@ function ComputeCover(movesets: string[][], ind: number, mons: string[], groupCo
         }
         return out;
     }
-
-    let vals: number[][] = [];
-    let valSums: number[] = [];
 
     function bestCombo(inds: number[], limit: number, branchLimit?: number): [number, number[]] {
         let opts: [number, number][] = [];
@@ -337,17 +340,22 @@ function ComputeCover(movesets: string[][], ind: number, mons: string[], groupCo
         vals.forEach((r, i) => { (r as any).name = rows[i]; } );
         valSums = vals.map(sum);
 
-        const [combSum, combInds] = bestCombo([], 4, 6);
+        const [combSum, combInds] = bestCombo([], 4, 4);
+
+        for (const ind of combInds) {
+            (vals[ind] as any).star = true;
+        }
 
         console.log(Math.round(maxSumRows(combInds) / vals[0].length * 500) / 10 + "%");
         // console.log(combInds);
 
         // rows.map((ms, i) => [vals[i].reduce((x,y)=>x+y), i]);
-        // vals = sortBy(vals, (a: any[]) => -a.reduce((x, y) => x + y) );
+        vals = sortBy(vals, (a: any[]) => -a.reduce((x, y) => x + y) );
         for (let j = 0; j < vals.length; j++) {
             const val = vals[j];
             const sum = Math.round(val.reduce((x, y) => x + y) / val.length * 50);
-            const star = combInds.indexOf(j) === -1 ? "" : "* ";
+            //const star = combInds.indexOf(j) === -1 ? "" : "* ";
+            const star = (val as any).star ? "* " : "";
             if (!star) continue;
             // console.log((j + star + (val as any).name.join(",")).padEnd(50), (sum + "%").padStart(5), val.map(x =>'▁▂▃▄▅▆▇█'[Math.min((x* 7 / 2)|0, 7)]).join(""));
             console.log(((val as any).name.join(",")).padEnd(50), (sum + "%").padStart(5), val.map(x =>'▁▂▃▄▅▆▇█'[Math.min((x* 7 / 2)|0, 7)]).join(""));
@@ -453,7 +461,7 @@ async function main() {
 
     const learnsets: string[][] = [];
     let movesets: string[][] = [];
-    let mons: string[] = [];
+    let mainMons: string[] = [];
     let alternates: [number[], string[]][][] = [];
 
     for (let n = genStart; n <= genEnd; n++) {
@@ -462,15 +470,15 @@ async function main() {
         process.env.SKIPMOVES || console.log(n, s.name, ls.length, ls.join(","));
         learnsets.push(ls);
         movesets.push(ls.slice(0, 4));
-        mons.push(MakePackedTeam(n, ls.slice(0, 4)));
+        mainMons.push(MakePackedTeam(n, ls.slice(0, 4)));
         alternates.push([]);
     }
 
     if (0) {
         for (let i = 0; ; i++) {
             let battles = ComputeBattleSpec(
-                mons[0], 0,
-                mons.slice(0, 20),
+                mainMons[0], 0,
+                mainMons.slice(0, 20),
                 //'Charmander|||NoAbility|flamethrower,slash,scratch|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||',
                 //"Squirtle|||NoAbility|hydropump,tackle|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||",
                 roundsPerMatch,
@@ -481,7 +489,7 @@ async function main() {
             await sleep(1000);
             continue;
             await ComputeResult(
-                mons[0], mons[1],
+                mainMons[0], mainMons[1],
                 //'Charmander|||NoAbility|flamethrower,slash,scratch|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||',
                 //"Squirtle|||NoAbility|hydropump,tackle|Quirky|255,255,255,255,255,255|N|30,30,30,30,30,30|||",
                 i, true);
@@ -495,18 +503,32 @@ async function main() {
         let prevState = fs.readFileSync(fname);
         if (prevState) {
             prevState = JSON.parse(prevState);
-            mons = prevState.mons;
+            mainMons = prevState.mons;
             movesets = prevState.movesets;
-            alternates = prevState.alternates;
+            alternates = prevState.alternates || alternates;
         }
     } catch {}
 
     for (let loopcount = 0;; loopcount++) {
-        for (let a = 0; a < mons.length; a++) {
+        for (let a = 0; a < movesets.length; a++) {
             cachedResults.clear(); // large map operations are very slow
             const n = a + genStart;
             const species = numToSpecies.get(n)!;
             const learnset = learnsets[a];
+
+            const mons: string[] = [];
+            for (let b = 0; b < movesets.length; b++) {
+                let ms = movesets[b];
+                if (alternates[b].length > 0 && false) {
+                    ms = alternates[b][0][1];
+                    for (let i = 1; i < alternates[b].length; i++) {
+                        if ((alternates[b][i][0]).indexOf(n) >= 0) {
+                            ms = alternates[b][i][1];
+                        }
+                    }
+                }
+                mons.push(MakePackedTeam(b + genStart, ms));
+            }
 
             let probeCount = 0;
 
@@ -576,15 +598,6 @@ async function main() {
             }
             */
 
-            if (process.env.COVER) {
-                const picks = ComputeCover(msa, a, mons, 4, 10) || [];
-                for (const pick of picks) {
-                    attempt(msa[pick], 20, {split: 8});
-                    msa.pop();
-                }
-                await commit();
-            }
-
             for (let i = 0; i < scoreMove.length && i < 20 && scoreMove[i][0] >= initScore * .9; i++) {
                 attempt(scoreMove[i][1], 20, {split: 8});
                 msa.pop();
@@ -601,6 +614,38 @@ async function main() {
             let bestScore = scoreMove[0][0];
             let bestMoves = scoreMove[0][1];
 
+            if (process.env.COVER) {
+                const picks = (ComputeCover(msa, a, mons, 4, 10) || []).map(x => msa[x]);
+                for (const pick of picks) {
+                    attempt(pick, 20, {split: 8});
+                    msa.pop();
+                }
+                await commit();
+
+                // populate alternates by picking the moveset that maximizes score
+                // for each given matchup
+                const pt = picks.map(x => MakePackedTeam(a + genStart, x));
+
+                let sel: typeof alternates[0] = alternates[a] = picks.map(x => [[], x]);
+
+                for (let b = 0; b < mons.length; b++) {
+                    let bi = 0, bs = 0;
+                    for (let pi = 0; pi < pt.length; pi++) {
+                        const row = GetResult(pt[pi], mons[b]);
+                        if (!row) continue;
+                        const avg = row.avg;
+                        if (avg > bs) {
+                            bi = pi;
+                            bs = bs;
+                        }
+                    }
+                    sel[bi][0].push(b + genStart);
+                }
+
+                sortBy(sel, x => -x[0].length);
+                sel[0][0] = [];  // first alternate moveset is "default" and wins the most matches
+            }
+
             if (process.env.FINAL) {
                 attempt(bestMoves, 50, {half: true, split: 16});
                 await commit();
@@ -611,12 +656,12 @@ async function main() {
                 let bestPerc = (bestScore / (mons.length * 2) * 100) | 0;
                 console.log(n, `${probeCount}B/${comboCount}C`, proms.length, species.name, `${initPerc}% => ${bestPerc}%`, initMoves.join(','), '=>', bestMoves.join(','));
                 movesets[a] = bestMoves;
-                mons[a] = MakePackedTeam(n, bestMoves);
+                mainMons[a] = MakePackedTeam(n, bestMoves);
             } else {
                 console.log(n, `${probeCount}B/${comboCount}C`, proms.length, species.name, `${initPerc}%`, initMoves.join(','));
             }
         }
-        fs.writeFileSync(`opt${gen}.json`, JSON.stringify({mons, movesets}));
+        fs.writeFileSync(`opt${gen}.json`, JSON.stringify({mons: mainMons, movesets, alternates}));
         roundsPerMatch++;
         break;
         console.log("LOOP", loopcount);
