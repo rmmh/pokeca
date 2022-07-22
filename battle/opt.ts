@@ -28,8 +28,14 @@ switch (gen) {
     case 6: genStart = 650, genEnd = 721; break;
 }
 
+const GENUPTO = !!process.env.ALL;
+
+if (GENUPTO) {
+    genStart = 1;
+}
+
 for (const species of dex.species.all()) {
-    if (!numToSpecies.has(species.num) && species.num > 0 && species.gen === gen && !species.forme) {
+    if (!numToSpecies.has(species.num) && species.num > 0 && (GENUPTO ? species.gen <= gen : species.gen === gen) && !species.forme) {
         numToSpecies.set(species.num, species);
     }
 }
@@ -509,15 +515,38 @@ async function main() {
     }
 
     let fname = `opt${gen}.json`;
+    if (GENUPTO) {
+        fname = `opt${gen}all.json`;
+    }
     try {
         let prevState = fs.readFileSync(fname);
         if (prevState) {
             prevState = JSON.parse(prevState);
             mainMons = prevState.mons;
             movesets = prevState.movesets;
-            alternates = prevState.alternates || alternates;
+            if (process.env.COVER) {
+                alternates = prevState.alternates || alternates;
+            }
         }
-    } catch {}
+    } catch {
+        try {
+            if (GENUPTO) {
+                mainMons = [];
+                movesets = [];
+                for (let g = 1; g <= gen; g++) {
+                    let prevState = fs.readFileSync(`opt${g}.json`);
+                    if (prevState) {
+                        prevState = JSON.parse(prevState);
+                        mainMons = mainMons.concat(prevState.mons);
+                        movesets = movesets.concat(prevState.movesets);
+                    }
+                }
+            }
+        } catch {
+            console.log("generate the gen individually first");
+            process.exit(1);
+        }
+    }
 
     function makeOpponents(a: number) {
         const mons: string[] = [];
@@ -575,7 +604,8 @@ async function main() {
             const species = numToSpecies.get(n)!;
             const learnset = learnsets[a];
 
-            const mons = makeOpponents(a);
+            let mons = makeOpponents(a);
+
             probeCount = 0;
 
             let msa: string[][] = [];
@@ -599,6 +629,10 @@ async function main() {
                 }
             }
 
+            // optimization: run the full move permutations against only 1/16th of
+            // the full opponent roster, then run the top moves again to determine optimal
+            let origmons = mons;
+            mons = origmons.filter((_, i) => !(i % 16));
 
             for (const c of new $C.Combination(learnset, 1)) {
                 attempt(c);
@@ -620,18 +654,37 @@ async function main() {
             let initScore = (RetrieveScores([movesets[a]], a, mons))[0];
             let initMoves = movesets[a];
 
-            let scores = RetrieveScores(msa, a, mons);
-            let scoreMove: [number, string[]][] = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
+            let scoreMove: [number, string[]][] = [];
 
-            for (let i = 0; i < scoreMove.length && i < 20 && scoreMove[i][0] >= initScore * .9; i++) {
-                attempt(scoreMove[i][1], 20, {split: 8});
+            function updateScores() {
+                scoreMove = sortBy(RetrieveScores(msa, a, mons).map((v, i) => [v, msa[i]]), x => -x[0]);
+            }
+
+            updateScores();
+
+            // now try the top contenders against the full opponent roster
+            mons = origmons;
+
+            // 1 round for the top 100 movesets
+            for (let i = 0; i < scoreMove.length && i < 100 && scoreMove[i][0] >= initScore * .7; i++) {
+                attempt(scoreMove[i][1], 1, {split: 8});
                 msa.pop();
             }
 
             await commit();
+            updateScores();
 
-            scores = RetrieveScores(msa, a, mons);
-            scoreMove = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
+            // initScore can change with the extra sampling
+            initScore = (RetrieveScores([movesets[a]], a, mons))[0];
+
+            // 10 rounds for the top 20 movesets
+            for (let i = 0; i < scoreMove.length && i < 20 && scoreMove[i][0] >= initScore * .9; i++) {
+                attempt(scoreMove[i][1], 10, {split: 8});
+                msa.pop();
+            }
+
+            await commit();
+            updateScores();
 
             // initScore can change with the extra sampling
             initScore = (RetrieveScores([movesets[a]], a, mons))[0];
@@ -686,7 +739,7 @@ async function main() {
                 console.log(n, `${probeCount}B/${comboCount}C`, proms.length, species.name, `${initPerc}%`, initMoves.join(','));
             }
         }
-        fs.writeFileSync(`opt${gen}.json`, JSON.stringify({mons: mainMons, movesets, alternates, learnsets}));
+        fs.writeFileSync(fname, JSON.stringify({mons: mainMons, movesets, alternates, learnsets}));
         roundsPerMatch++;
         break;
         console.log("LOOP", loopcount);
