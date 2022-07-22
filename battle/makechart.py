@@ -184,8 +184,8 @@ im = PIL.Image.new(mode="RGBA", size=(movewidth + basedim + 16, basedim + 8), co
 
 # extracted from pokesprite's git repo under the icons/pokemon/regular dir using this cmd:
 # MAGICK_OCL_DEVICE=OFF montage -background none \
-# $(jq -r '.[].slug.eng + ".png" ' < ../../../data/pkmn.json  | head -n 721) \
-# -geometry +0+0  -tile 16x gen1.png && gliv boxicons.png
+# $(jq -r '.[].slug.eng + ".png" ' < ../../../data/pokemon.json | head -n 809) \
+# -geometry +0+0 -tile 16x boxicons.png
 sp = PIL.Image.open("boxicons.png")
 if opts.color == 'redgrayblue':
     cm = matplotlib.colors.LinearSegmentedColormap.from_list('redgrayblue',
