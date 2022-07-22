@@ -140,7 +140,7 @@ function GetResult(teamA: string|number, teamB: string|number) {
     return res;
 }
 
-function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string[], wantRounds: number, half?: boolean) {
+function ComputeBattleSpec(testTeam: string|string[], testInd: number, otherTeams: string[], wantRounds: number, half?: boolean) {
     const db = getDB();
 
     function getTeamId(team: string, ind: number) {
@@ -155,10 +155,8 @@ function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string
         return tid;
     }
 
-    const testTeamId = getTeamId(testTeam, testInd);
-
     const spec: BattleSpec = {
-        teams: [testTeam],
+        teams: [],
         matches: [],
     }
 
@@ -169,31 +167,38 @@ function ComputeBattleSpec(testTeam: string, testInd: number, otherTeams: string
         if (half && i < testInd) {
             continue;
         }
+        const curTeam = typeof testTeam === "string" ? testTeam : testTeam[i];
+        const tid = getTeamId(curTeam, testInd);
         const otherTeamId = getTeamId(otherTeams[i], i);
 
         let neededBattles = wantRounds;
         let seed = 0;
         let matchupId = 0;
-        let cres = GetResult(testTeamId, otherTeamId);
+        let cres = GetResult(tid, otherTeamId);
         if (cres) {
             const tot = cres.lose+cres.tie+cres.win;
             matchupId = cres.id;
             neededBattles -= tot;
             seed = tot;
         } else {
-            const row = db.prepare('insert into results(gen, teama, teamb, win, lose, tie) values(?, ?, ?, 0, 0, 0)').run(gen, testTeamId, otherTeamId);
+            const row = db.prepare('insert into results(gen, teama, teamb, win, lose, tie) values(?, ?, ?, 0, 0, 0)').run(gen, tid, otherTeamId);
             matchupId = row.lastInsertRowid as number;
             const res = new Result(matchupId, 0, 0, 0);
-            cachedResults.set(matchupId, res).set(MatchupKey(testTeamId, otherTeamId), res);
+            cachedResults.set(matchupId, res).set(MatchupKey(tid, otherTeamId), res);
         }
         if (neededBattles <= 0) {
             continue;
         }
 
+        let curInd = spec.teams.indexOf(curTeam);
+        if (curInd === -1) {
+            curInd = spec.teams.length;
+            spec.teams.push(curTeam);
+        }
         const j = spec.teams.length;
         spec.teams.push(otherTeams[i]);
         for (let i = 0; i < neededBattles; i++, seed++) {
-            spec.matches.push([0, j, seed, matchupId]);
+            spec.matches.push([curInd, j, seed, matchupId]);
         }
     }
     if (spec.matches.length === 0) {
@@ -341,6 +346,11 @@ function ComputeCover(movesets: string[][], ind: number, mons: string[], groupCo
         valSums = vals.map(sum);
 
         const [combSum, combInds] = bestCombo([], 4, 4);
+
+        if (combInds.length === 0) {
+            // e.g. Abra losing at everything with Teleport
+            combInds.push(0);
+        }
 
         for (const ind of combInds) {
             (vals[ind] as any).star = true;
@@ -509,6 +519,55 @@ async function main() {
         }
     } catch {}
 
+    function makeOpponents(a: number) {
+        const mons: string[] = [];
+        for (let b = 0; b < movesets.length; b++) {
+            let ms = movesets[b];
+            if (alternates[b].length > 0) {
+                ms = alternates[b][0][1];
+                for (let i = 1; i < alternates[b].length; i++) {
+                    if ((alternates[b][i][0]).indexOf(a + genStart) >= 0) {
+                        ms = alternates[b][i][1];
+                    }
+                }
+            }
+            mons.push(MakePackedTeam(b + genStart, ms));
+        }
+        return mons;
+    }
+
+    function makeSelves(a: number) {
+        const mons: string[] = [];
+        if (alternates[a].length == 0) {
+            return MakePackedTeam(a + genStart, movesets[a]);
+        }
+        const alts = alternates[a];
+        for (let b = 0; b < movesets.length; b++) {
+            let ms = alts[0][1];
+            for (let i = 1; i < alts.length; i++) {
+                if ((alts[i][0]).indexOf(b + genStart) >= 0) {
+                    ms = alts[i][1];
+                }
+            }
+            mons.push(MakePackedTeam(a + genStart, ms));
+        }
+        return mons;
+    }
+
+
+    let probeCount = 0;
+    let proms: Promise<BattleRes>[] = [];
+
+    async function commit() {
+        // console.log("waiting for", proms.length);
+        for (const prom of proms) {
+            const res = await prom;
+            probeCount += res.length;
+            CommitBattles(res);
+        }
+        proms = [];
+    }
+
     for (let loopcount = 0;; loopcount++) {
         for (let a = 0; a < movesets.length; a++) {
             cachedResults.clear(); // large map operations are very slow
@@ -516,24 +575,10 @@ async function main() {
             const species = numToSpecies.get(n)!;
             const learnset = learnsets[a];
 
-            const mons: string[] = [];
-            for (let b = 0; b < movesets.length; b++) {
-                let ms = movesets[b];
-                if (alternates[b].length > 0 && false) {
-                    ms = alternates[b][0][1];
-                    for (let i = 1; i < alternates[b].length; i++) {
-                        if ((alternates[b][i][0]).indexOf(n) >= 0) {
-                            ms = alternates[b][i][1];
-                        }
-                    }
-                }
-                mons.push(MakePackedTeam(b + genStart, ms));
-            }
-
-            let probeCount = 0;
+            const mons = makeOpponents(a);
+            probeCount = 0;
 
             let msa: string[][] = [];
-            let proms: Promise<BattleRes>[] = [];
             let attempt = (ms: string[], rounds?: number, options?: {half?: boolean, split?: number}) => {
                 const battles = ComputeBattleSpec(MakePackedTeam(n, ms), a, mons, rounds || roundsPerMatch, options?.half || false);
                 msa.push(ms);
@@ -554,15 +599,6 @@ async function main() {
                 }
             }
 
-            let commit = async () => {
-                // console.log("waiting for", proms.length);
-                for (const prom of proms) {
-                    const res = await prom;
-                    probeCount += res.length;
-                    CommitBattles(res);
-                }
-                proms = [];
-            }
 
             for (const c of new $C.Combination(learnset, 1)) {
                 attempt(c);
@@ -587,17 +623,6 @@ async function main() {
             let scores = RetrieveScores(msa, a, mons);
             let scoreMove: [number, string[]][] = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
 
-            // console.log("scoremove init:", scoreMove.slice(0, 10));
-
-            ///*
-            /*for (const group of cover) {
-                for (const [ms, _opponents] of group) {
-                    attempt(ms, 20);
-                    msa.pop();
-                }
-            }
-            */
-
             for (let i = 0; i < scoreMove.length && i < 20 && scoreMove[i][0] >= initScore * .9; i++) {
                 attempt(scoreMove[i][1], 20, {split: 8});
                 msa.pop();
@@ -607,7 +632,6 @@ async function main() {
 
             scores = RetrieveScores(msa, a, mons);
             scoreMove = sortBy(scores.map((v, i) => [v, msa[i]]), x => -x[0]);
-            // console.log("scoreMove after:", scoreMove.slice(0, proms.length + 2));
 
             // initScore can change with the extra sampling
             initScore = (RetrieveScores([movesets[a]], a, mons))[0];
@@ -617,7 +641,7 @@ async function main() {
             if (process.env.COVER) {
                 const picks = (ComputeCover(msa, a, mons, 4, 10) || []).map(x => msa[x]);
                 for (const pick of picks) {
-                    attempt(pick, 20, {split: 8});
+                    attempt(pick, 10, {split: 8});
                     msa.pop();
                 }
                 await commit();
@@ -629,6 +653,7 @@ async function main() {
                 let sel: typeof alternates[0] = alternates[a] = picks.map(x => [[], x]);
 
                 for (let b = 0; b < mons.length; b++) {
+                    if (b === a) continue;
                     let bi = 0, bs = 0;
                     for (let pi = 0; pi < pt.length; pi++) {
                         const row = GetResult(pt[pi], mons[b]);
@@ -636,7 +661,7 @@ async function main() {
                         const avg = row.avg;
                         if (avg > bs) {
                             bi = pi;
-                            bs = bs;
+                            bs = avg;
                         }
                     }
                     sel[bi][0].push(b + genStart);
@@ -661,11 +686,35 @@ async function main() {
                 console.log(n, `${probeCount}B/${comboCount}C`, proms.length, species.name, `${initPerc}%`, initMoves.join(','));
             }
         }
-        fs.writeFileSync(`opt${gen}.json`, JSON.stringify({mons: mainMons, movesets, alternates}));
+        fs.writeFileSync(`opt${gen}.json`, JSON.stringify({mons: mainMons, movesets, alternates, learnsets}));
         roundsPerMatch++;
         break;
         console.log("LOOP", loopcount);
     }
+
+    // do a final round of computing multiple battles for all the specified matchups
+    // this lets the graphing look nicer
+    probeCount = 0;
+    for (let a = 0; a < movesets.length; a++) {
+        function attempt(selves: string|string[], mons: string[]) {
+            const battles = ComputeBattleSpec(selves, a, mons, 100, true);
+
+            if (battles.matches.length == 0) {
+                return;
+            }
+
+            proms.push(MULTIPROC ? pool.exec('RunBattles', [battles]) : RunBattles(battles));
+        }
+        if (process.env.COVER) {
+            const mons = makeOpponents(a);
+            const selves = makeSelves(a);
+            attempt(selves, mons);
+        }
+        attempt(MakePackedTeam(a + genStart, movesets[a]), mainMons);
+    }
+    await commit();
+    console.log(`Final: ${probeCount}B`, proms.length);
+
 
     pool.terminate();
 }

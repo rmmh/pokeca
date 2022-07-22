@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 
+import argparse
+import itertools
+
 import PIL.Image
 import PIL.ImageDraw
 import PIL.ImageFont
 import matplotlib.pyplot as plt
 import matplotlib.colors
-import argparse
+from pyrsistent import m
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--tiers', nargs='*')
 parser.add_argument('--color', default='coolwarm')
+parser.add_argument('--alternates', action='store_true')
 parser.add_argument('--order', choices=['greedy', 'tsp'])
 parser.add_argument('infile', nargs='?', default='results')
 parser.add_argument('outfile', nargs='?', default='results.png')
@@ -60,17 +64,62 @@ def loadResultsDB(fname):
     db = sqlite3.connect('battle.db')
     count = len(matchups['mons'])
     data = [[None] * (count) for _ in range(count)]
-    tids = {packed: db.execute('select id from team where packed=?', (packed,)).fetchone()[0] for packed in matchups['mons']}
+
+    def get_tid(packed):
+        return db.execute('select id from team where packed=?', (packed,)).fetchone()[0]
+
+    tids = {packed: get_tid(packed) for packed in matchups['mons']}
+
+    for a in range(count):
+        data[a][a] = .5
+        if opts.alternates and 'alternates' in matchups:
+            ms = sorted(set(itertools.chain(*[x[1] for x in matchups['alternates'][a]])),
+                    key=matchups['learnsets'][a].index, reverse=True)
+        else:
+            ms = matchups['movesets'][a][::-1]
+        entries[a] = {'moves': [x.title() for x in ms]}
+
+    for packed, moves, alts in zip(matchups['mons'], matchups['movesets'], matchups.get('alternates', [])):
+        for alt in alts:
+            np = packed.replace('|' + ','.join(moves), '|' + ','.join(alt[1]))
+            alt[1] = np
+            tids[np] = get_tid(np)
+
     genStart = [1, 152, 252, 387, 494, 650][gen - 1]
     genEnd = genStart + count - 1
-    for a, ta in enumerate(matchups['mons']):
-        data[a][a] = .5
-        entries[a] = {'moves': [x.title() for x in matchups['movesets'][a][::-1]]}
-        for b, tb in enumerate(matchups['mons'][a+1:], a+1):
-            win, loss, tie = db.execute('select win, lose, tie from results where gen=? '
-                ' and teama=? and teamb=?', (gen, tids[ta], tids[tb])).fetchone()
+
+    def get_matchup_teams(a, b):
+        if not opts.alternates or 'alternates' not in matchups:
+            return matchups['mons'][a], matchups['mons'][b]
+        ta, tb = None, None
+        for targs, packed in matchups['alternates'][a]:
+            # assert targs or ta is None, (a, matchups['mons'][a], matchups['alternates'][a])
+            if b + genStart in targs or not ta:
+                ta = packed
+        for targs, packed in matchups['alternates'][b]:
+            # TODO: handle pointless alternate movesets (ex. Venusaur)
+            # assert targs or tb is None, (b, matchups['mons'][b], matchups['alternates'][b])
+            if a + genStart in targs or not tb:
+                tb = packed
+        return ta, tb
+
+    for a in range(count):
+        for b in range(a+1, count):
+            ta, tb = get_matchup_teams(a, b)
+            try:
+                if a < b:
+                    win, loss, tie = db.execute('select win, lose, tie from results where gen=? '
+                        ' and teama=? and teamb=?', (gen, tids[ta], tids[tb])).fetchone()
+                else:
+                    tie, loss, win = db.execute('select win, lose, tie from results where gen=? '
+                        ' and teama=? and teamb=?', (gen, tids[tb], tids[ta])).fetchone()
+            except TypeError:
+                continue
+            if not win+loss+tie:
+                continue
             data[a][b] = (loss+tie/2)/(win+loss+tie)
             data[b][a] = (win+tie/2)/(win+loss+tie)
+
     return data
 
 if opts.infile.endswith('.json'):
