@@ -62,13 +62,20 @@ a { color: lightblue; }
 </div>
 
 <div id="viewport" style="height:100%;user-select:none;overflow:clip">
-    <canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="1000" height="1000" ondragstart="return false">
+    <canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="1000" height="1000" ondragstart="return false"></canvas>
 </div>
 <div id="typeOverlay" style="position: fixed; bottom: 0; right: 0; background-color: black; font-size: 2em;">
 </div>
 </body>
 <script type="text/javascript">
 "use strict";
+
+const viewport = document.getElementById('viewport');
+const canvas = document.getElementById('canvas');
+const typeOverlay = document.getElementById('typeOverlay');
+const winstrat = document.getElementById('winstrat');
+const spawnkind = document.getElementById('spawnkind');
+const speedslider = document.getElementById('speedslider');
 
 const dim = canvas.width;
 
